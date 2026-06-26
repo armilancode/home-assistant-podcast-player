@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Home Assistant runtime/state files must never be committed.
+*.db
+*.db-*
+*.log
+*.log.*
+.storage/
+backups/
+deps/
+tts/
+known_devices.yaml
+secrets.yaml
+
+# Editor/OS noise.
+.DS_Store
+.idea/
+.vscode/

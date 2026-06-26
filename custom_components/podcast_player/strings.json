@@ -1,0 +1,44 @@
+{
+  "title": "Podcast Player",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Podcast Player",
+        "description": "Create the Podcast Player integration. Feeds can be added from the dashboard card and service actions during the HACS alpha."
+      },
+      "init": {
+        "title": "Podcast Player options",
+        "data": {
+          "refresh_interval_minutes": "Refresh interval",
+          "max_episodes_per_feed": "Maximum cached episodes per feed",
+          "direct_first": "Prefer direct podcast URLs for media players"
+        },
+        "data_description": {
+          "refresh_interval_minutes": "How often Podcast Player refreshes RSS feeds, in minutes.",
+          "max_episodes_per_feed": "How many recent episodes to keep cached per feed. Listening progress is preserved when old cached episodes are trimmed.",
+          "direct_first": "Use original podcast audio URLs first. Turn this off to prefer signed Home Assistant proxy URLs when available."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Podcast Player is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Podcast Player options",
+        "data": {
+          "refresh_interval_minutes": "Refresh interval",
+          "max_episodes_per_feed": "Maximum cached episodes per feed",
+          "direct_first": "Prefer direct podcast URLs for media players"
+        },
+        "data_description": {
+          "refresh_interval_minutes": "How often Podcast Player refreshes RSS feeds, in minutes.",
+          "max_episodes_per_feed": "How many recent episodes to keep cached per feed. Listening progress is preserved when old cached episodes are trimmed.",
+          "direct_first": "Use original podcast audio URLs first. Turn this off to prefer signed Home Assistant proxy URLs when available."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "domain": "podcast_player",
+  "name": "Podcast Player",
+  "after_dependencies": [
+    "http",
+    "media_source"
+  ],
+  "codeowners": [
+    "@armilancode"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/armilancode/home-assistant-podcast-player",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/armilancode/home-assistant-podcast-player/issues",
+  "requirements": [
+    "feedparser==6.0.11"
+  ],
+  "single_config_entry": true,
+  "version": "0.3.0-alpha.0"
+}
