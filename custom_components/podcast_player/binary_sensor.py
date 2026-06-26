@@ -5,12 +5,11 @@ from __future__ import annotations
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, NAME, VERSION
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
+from .entity import podcast_player_device_info
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -26,13 +25,7 @@ class PodcastBaseBinarySensor(CoordinatorEntity[PodcastUpdateCoordinator], Binar
 
     def __init__(self, coordinator: PodcastUpdateCoordinator) -> None:
         super().__init__(coordinator)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, "podcast_player")},
-            name=NAME,
-            manufacturer="Local custom integration",
-            model="RSS Podcast Player",
-            sw_version=VERSION,
-        )
+        self._attr_device_info = podcast_player_device_info()
 
 
 class IsPlayingBinarySensor(PodcastBaseBinarySensor):

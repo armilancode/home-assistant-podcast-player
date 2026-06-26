@@ -5,12 +5,11 @@ from __future__ import annotations
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, NAME, VERSION
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
+from .entity import podcast_player_device_info
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -35,13 +34,7 @@ class PodcastButton(CoordinatorEntity[PodcastUpdateCoordinator], ButtonEntity):
     def __init__(self, coordinator: PodcastUpdateCoordinator) -> None:
         """Initialize button."""
         super().__init__(coordinator)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, "podcast_player")},
-            name=NAME,
-            manufacturer="Local custom integration",
-            model="RSS Podcast Player",
-            sw_version=VERSION,
-        )
+        self._attr_device_info = podcast_player_device_info()
 
 
 class RefreshButton(PodcastButton):
@@ -62,6 +55,7 @@ class PlayLatestButton(PodcastButton):
     _attr_name = "Play latest episode"
     _attr_unique_id = "podcast_player_play_latest"
     _attr_icon = "mdi:play-circle-outline"
+    _attr_entity_registry_enabled_default = False
 
     async def async_press(self) -> None:
         """Select/play latest episode in podcast state."""
@@ -74,6 +68,7 @@ class PlayNextUnplayedButton(PodcastButton):
     _attr_name = "Play next unplayed"
     _attr_unique_id = "podcast_player_play_next_unplayed"
     _attr_icon = "mdi:playlist-play"
+    _attr_entity_registry_enabled_default = False
 
     async def async_press(self) -> None:
         """Select/play next unplayed episode in podcast state."""
@@ -86,6 +81,7 @@ class MarkCurrentPlayedButton(PodcastButton):
     _attr_name = "Mark current played"
     _attr_unique_id = "podcast_player_mark_current_played"
     _attr_icon = "mdi:check-circle-outline"
+    _attr_entity_registry_enabled_default = False
 
     async def async_press(self) -> None:
         """Mark current episode played."""

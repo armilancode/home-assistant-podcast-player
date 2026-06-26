@@ -14,12 +14,11 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, NAME, VERSION
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
+from .entity import podcast_player_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,13 +43,7 @@ class PodcastPlayerEntity(CoordinatorEntity[PodcastUpdateCoordinator], MediaPlay
         # podcast_player.* services. Do not advertise native HA playback controls
         # here, because the native media popup cannot output browser audio by itself.
         self._attr_supported_features = MediaPlayerEntityFeature(0)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, "podcast_player")},
-            name=NAME,
-            manufacturer="Local custom integration",
-            model="RSS Podcast Player",
-            sw_version=VERSION,
-        )
+        self._attr_device_info = podcast_player_device_info()
 
     @property
     def state(self) -> MediaPlayerState:

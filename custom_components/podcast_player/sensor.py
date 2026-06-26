@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, NAME, VERSION
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
+from .entity import podcast_player_device_info
 
 
 def _feed_sort_key(feed: dict[str, Any]) -> tuple[str, str]:
@@ -71,13 +71,7 @@ class PodcastBaseSensor(CoordinatorEntity[PodcastUpdateCoordinator], SensorEntit
 
     def __init__(self, coordinator: PodcastUpdateCoordinator) -> None:
         super().__init__(coordinator)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, "podcast_player")},
-            name=NAME,
-            manufacturer="Local custom integration",
-            model="RSS Podcast Player",
-            sw_version=VERSION,
-        )
+        self._attr_device_info = podcast_player_device_info()
 
     @property
     def _player(self) -> dict[str, Any]:
@@ -101,14 +95,13 @@ class PodcastBaseSensor(CoordinatorEntity[PodcastUpdateCoordinator], SensorEntit
 class PodcastFeedSensor(PodcastBaseSensor):
     """Automation-targetable sensor representing one podcast feed.
 
-    These entities are intentionally named ``Podcast feed <title>`` so Home
+    These entities are intentionally named ``Feed <title>`` so Home
     Assistant creates readable entity IDs like
-    ``sensor.podcast_feed_the_joe_rogan_experience``. Services can then use the
+    ``sensor.podcast_player_feed_the_joe_rogan_experience``. Services can then use the
     normal ``target.entity_id`` dropdown to select the podcast, while the output
-    output media player remains a normal data field named ``media_player_entity_id``.
+    media player remains a normal data field named ``media_player_entity_id``.
     """
 
-    _attr_has_entity_name = False
     _attr_icon = "mdi:podcast"
 
     def __init__(self, coordinator: PodcastUpdateCoordinator, feed_id: str) -> None:
@@ -119,7 +112,7 @@ class PodcastFeedSensor(PodcastBaseSensor):
     @property
     def name(self) -> str:
         feed = self._feed() or {}
-        return f"Podcast feed {feed.get('title') or self.feed_id}"
+        return f"Feed {feed.get('title') or self.feed_id}"
 
     @property
     def available(self) -> bool:
@@ -193,6 +186,8 @@ class FeedCountSensor(PodcastBaseSensor):
     _attr_name = "Feeds"
     _attr_unique_id = "podcast_player_feeds"
     _attr_icon = "mdi:rss"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> int:
@@ -271,6 +266,8 @@ class CurrentFeedSensor(PodcastBaseSensor):
     _attr_name = "Current feed"
     _attr_unique_id = "podcast_player_current_feed"
     _attr_icon = "mdi:rss-box"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> str | None:
@@ -319,7 +316,10 @@ class CurrentPositionSensor(PodcastBaseSensor):
     _attr_name = "Current position"
     _attr_unique_id = "podcast_player_current_position"
     _attr_icon = "mdi:progress-clock"
-    _attr_native_unit_of_measurement = "s"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
 
     @property
     def native_value(self) -> int:
@@ -332,7 +332,10 @@ class CurrentDurationSensor(PodcastBaseSensor):
     _attr_name = "Current duration"
     _attr_unique_id = "podcast_player_current_duration"
     _attr_icon = "mdi:timer-outline"
-    _attr_native_unit_of_measurement = "s"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
 
     @property
     def native_value(self) -> int | None:
@@ -347,7 +350,9 @@ class CurrentProgressSensor(PodcastBaseSensor):
     _attr_name = "Current progress"
     _attr_unique_id = "podcast_player_current_progress"
     _attr_icon = "mdi:percent"
-    _attr_native_unit_of_measurement = "%"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = PERCENTAGE
 
     @property
     def native_value(self) -> int:
@@ -365,6 +370,8 @@ class PlaybackSpeedSensor(PodcastBaseSensor):
     _attr_name = "Playback speed"
     _attr_unique_id = "podcast_player_playback_speed"
     _attr_icon = "mdi:speedometer"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> float:
@@ -377,6 +384,8 @@ class CurrentOutputSensor(PodcastBaseSensor):
     _attr_name = "Current output"
     _attr_unique_id = "podcast_player_current_output"
     _attr_icon = "mdi:speaker"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> str:
@@ -416,6 +425,8 @@ class LatestByFeedSensor(PodcastBaseSensor):
     _attr_name = "Latest by feed"
     _attr_unique_id = "podcast_player_latest_by_feed"
     _attr_icon = "mdi:format-list-bulleted"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> int:
