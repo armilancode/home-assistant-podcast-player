@@ -5,102 +5,84 @@ add_feed:
     rss_url:
       required: true
       selector:
-        text: {}
+        text:
+          type: url
       name: RSS URL
-      description: Podcast RSS feed URL.
+      description: The podcast RSS feed URL.
+
 remove_feed:
   name: Remove podcast feed
-  description: Remove a feed. Listening history can optionally be kept.
+  description: Remove a podcast feed. Listening history can be kept.
   fields:
     feed_id:
       required: true
       selector:
         text: {}
       name: Feed ID
+      description: The exact feed ID to remove. For interactive use, remove feeds from the integration options.
     keep_history:
       required: false
       default: true
       selector:
         boolean: {}
       name: Keep listening history
+      description: Keep episode progress after removing the feed.
+
 refresh:
-  name: Refresh feeds
-  description: Refresh selected Podcast feed sensor target(s), one feed by feed_id/feed_name, or all feeds if omitted. Action
-    Target = podcast feed sensor.
+  name: Refresh podcast feeds
+  description: Refresh selected podcast feed targets, or refresh all feeds when no target is selected.
   target:
     entity:
-    - integration: podcast_player
+      integration: podcast_player
       domain: sensor
-  fields:
-    feed_id:
-      required: false
-      selector:
-        text: {}
-      name: Feed ID
-      description: Legacy exact feed ID. Prefer selecting a Podcast feed sensor as the action Target in the UI.
-    feed_name:
-      required: false
-      selector:
-        text: {}
-      name: Feed name
-      description: Friendly fallback, e.g. Candace or Joe Rogan. Target entity wins if a Podcast feed sensor is selected.
+  fields: {}
+
 refresh_feeds:
-  name: Refresh feeds
-  description: Alias for refresh. Action Target = podcast feed sensor; feed_id/feed_name remain backward-compatible fallbacks.
+  name: Refresh podcast feeds
+  description: Refresh selected podcast feed targets, or refresh all feeds when no target is selected.
   target:
     entity:
-    - integration: podcast_player
+      integration: podcast_player
       domain: sensor
-  fields:
-    feed_id:
-      required: false
-      selector:
-        text: {}
-      name: Feed ID
-      description: Legacy exact feed ID. Prefer selecting a Podcast feed sensor as the action Target in the UI.
-    feed_name:
-      required: false
-      selector:
-        text: {}
-      name: Feed name
-      description: Friendly fallback, e.g. Candace or Joe Rogan. Target entity wins if a Podcast feed sensor is selected.
+  fields: {}
+
 play_episode:
-  name: Play episode
-  description: Play a specific episode by ID. Leave Output media player empty for browser/card playback, or set it to a speaker/TV.
+  name: Play podcast episode
+  description: Play a specific episode. Leave the output media player empty for browser/card playback.
   fields:
     episode_id:
       required: true
       selector:
         text: {}
       name: Episode ID
+      description: The episode ID to play.
     media_player_entity_id:
       required: false
       selector:
         entity:
           domain: media_player
-      name: Output media player (speaker/TV)
-      description: Speaker/TV output, e.g. media_player.bedroom_tv. Leave empty for browser/card output.
+      name: Output media player
+      description: Optional Home Assistant media player for external playback.
     url_mode:
       required: false
       default: direct
       selector:
         select:
           options:
-          - direct
-          - signed_proxy
+            - direct
+            - signed_proxy
       name: URL mode
-      description: Direct sends the original podcast URL. Signed proxy sends a temporary Home Assistant proxy URL for speakers
-        that cannot reach the original URL.
+      description: Use the original podcast URL, or a temporary Home Assistant proxy URL for media players that need it.
     media_content_type:
       required: false
       default: music
       selector:
         select:
           options:
-          - music
-          - podcast
+            - music
+            - podcast
       name: Media content type
-      description: Most speakers/TVs work best with music. Try podcast only if a target handles it better.
+      description: Most media players work best with music. Use podcast only if the target handles it better.
     resume_position:
       required: false
       selector:
@@ -109,58 +91,43 @@ play_episode:
           mode: box
           unit_of_measurement: seconds
       name: Resume position
-      description: Optional seconds offset. If omitted, stored progress is used.
-    prefer_proxy:
-      required: false
-      default: false
-      selector:
-        boolean: {}
-      name: Prefer HA proxy URL legacy option
-      description: Legacy option. If true, url_mode becomes signed_proxy.
+      description: Optional start position in seconds. If omitted, saved progress is used.
+
 play_current:
-  name: Play current episode
-  description: Continue the current episode. Action Target selects optional Podcast feed sensor(s); Output media player is
-    the speaker/TV. Leave output empty for browser/card playback.
+  name: Play current podcast episode
+  description: Play the current episode. Select podcast feed targets only when you want to restrict episode selection.
   target:
     entity:
-    - integration: podcast_player
+      integration: podcast_player
       domain: sensor
   fields:
-    feed_id:
-      required: false
-      selector:
-        text: {}
-      name: Feed ID
-      description: Legacy exact feed ID. Prefer selecting a Podcast feed sensor as the action Target in the UI.
     media_player_entity_id:
       required: false
       selector:
         entity:
           domain: media_player
-      name: Output media player (speaker/TV)
-      description: Speaker/TV output, e.g. media_player.bedroom_tv. This is not the action Target; Target is the podcast feed
-        sensor.
+      name: Output media player
+      description: Optional Home Assistant media player for external playback. Leave empty for browser/card playback.
     url_mode:
       required: false
       default: direct
       selector:
         select:
           options:
-          - direct
-          - signed_proxy
+            - direct
+            - signed_proxy
       name: URL mode
-      description: Direct sends the original podcast URL. Signed proxy sends a temporary Home Assistant proxy URL for speakers
-        that cannot reach the original URL.
+      description: Use the original podcast URL, or a temporary Home Assistant proxy URL for media players that need it.
     media_content_type:
       required: false
       default: music
       selector:
         select:
           options:
-          - music
-          - podcast
+            - music
+            - podcast
       name: Media content type
-      description: Most speakers/TVs work best with music. Try podcast only if a target handles it better.
+      description: Most media players work best with music. Use podcast only if the target handles it better.
     resume_position:
       required: false
       selector:
@@ -169,63 +136,43 @@ play_current:
           mode: box
           unit_of_measurement: seconds
       name: Resume position
-    prefer_proxy:
-      required: false
-      default: false
-      selector:
-        boolean: {}
-      name: Prefer HA proxy URL legacy option
-      description: Legacy option. If true, url_mode becomes signed_proxy.
-    feed_name:
-      required: false
-      selector:
-        text: {}
-      name: Feed name
-      description: Friendly fallback, e.g. Candace or Joe Rogan. Target entity wins if a Podcast feed sensor is selected.
+      description: Optional start position in seconds. If omitted, saved progress is used.
+
 play_latest:
-  name: Play latest episode
-  description: Play the newest episode. Action Target selects Podcast feed sensor(s). Output media player is where to play
-    externally. Omit target/feed fields to search all feeds.
+  name: Play latest podcast episode
+  description: Play the newest episode from selected podcast feed targets, or from all feeds when no target is selected.
   target:
     entity:
-    - integration: podcast_player
+      integration: podcast_player
       domain: sensor
   fields:
-    feed_id:
-      required: false
-      selector:
-        text: {}
-      name: Feed ID
-      description: Legacy exact feed ID. Prefer selecting a Podcast feed sensor as the action Target in the UI.
     media_player_entity_id:
       required: false
       selector:
         entity:
           domain: media_player
-      name: Output media player (speaker/TV)
-      description: Speaker/TV output, e.g. media_player.bedroom_tv. This is not the action Target; Target is the podcast feed
-        sensor.
+      name: Output media player
+      description: Optional Home Assistant media player for external playback. Leave empty for browser/card playback.
     url_mode:
       required: false
       default: direct
       selector:
         select:
           options:
-          - direct
-          - signed_proxy
+            - direct
+            - signed_proxy
       name: URL mode
-      description: Direct sends the original podcast URL. Signed proxy sends a temporary Home Assistant proxy URL for speakers
-        that cannot reach the original URL.
+      description: Use the original podcast URL, or a temporary Home Assistant proxy URL for media players that need it.
     media_content_type:
       required: false
       default: music
       selector:
         select:
           options:
-          - music
-          - podcast
+            - music
+            - podcast
       name: Media content type
-      description: Most speakers/TVs work best with music. Try podcast only if a target handles it better.
+      description: Most media players work best with music. Use podcast only if the target handles it better.
     resume_position:
       required: false
       selector:
@@ -234,63 +181,43 @@ play_latest:
           mode: box
           unit_of_measurement: seconds
       name: Resume position
-    prefer_proxy:
-      required: false
-      default: false
-      selector:
-        boolean: {}
-      name: Prefer HA proxy URL legacy option
-      description: Legacy option. If true, url_mode becomes signed_proxy.
-    feed_name:
-      required: false
-      selector:
-        text: {}
-      name: Feed name
-      description: Friendly fallback, e.g. Candace or Joe Rogan. Target entity wins if a Podcast feed sensor is selected.
+      description: Optional start position in seconds. If omitted, saved progress is used.
+
 play_next_unplayed:
-  name: Play next unplayed episode
-  description: Play the newest unplayed episode. Action Target selects Podcast feed sensor(s). Output media player is where
-    to play externally. Omit target/feed fields to search all feeds.
+  name: Play next unplayed podcast episode
+  description: Play the newest unplayed episode from selected podcast feed targets, or from all feeds when no target is selected.
   target:
     entity:
-    - integration: podcast_player
+      integration: podcast_player
       domain: sensor
   fields:
-    feed_id:
-      required: false
-      selector:
-        text: {}
-      name: Feed ID
-      description: Legacy exact feed ID. Prefer selecting a Podcast feed sensor as the action Target in the UI.
     media_player_entity_id:
       required: false
       selector:
         entity:
           domain: media_player
-      name: Output media player (speaker/TV)
-      description: Speaker/TV output, e.g. media_player.bedroom_tv. This is not the action Target; Target is the podcast feed
-        sensor.
+      name: Output media player
+      description: Optional Home Assistant media player for external playback. Leave empty for browser/card playback.
     url_mode:
       required: false
       default: direct
       selector:
         select:
           options:
-          - direct
-          - signed_proxy
+            - direct
+            - signed_proxy
       name: URL mode
-      description: Direct sends the original podcast URL. Signed proxy sends a temporary Home Assistant proxy URL for speakers
-        that cannot reach the original URL.
+      description: Use the original podcast URL, or a temporary Home Assistant proxy URL for media players that need it.
     media_content_type:
       required: false
       default: music
       selector:
         select:
           options:
-          - music
-          - podcast
+            - music
+            - podcast
       name: Media content type
-      description: Most speakers/TVs work best with music. Try podcast only if a target handles it better.
+      description: Most media players work best with music. Use podcast only if the target handles it better.
     resume_position:
       required: false
       selector:
@@ -299,103 +226,103 @@ play_next_unplayed:
           mode: box
           unit_of_measurement: seconds
       name: Resume position
-    prefer_proxy:
-      required: false
-      default: false
-      selector:
-        boolean: {}
-      name: Prefer HA proxy URL legacy option
-      description: Legacy option. If true, url_mode becomes signed_proxy.
-    feed_name:
-      required: false
-      selector:
-        text: {}
-      name: Feed name
-      description: Friendly fallback, e.g. Candace or Joe Rogan. Target entity wins if a Podcast feed sensor is selected.
+      description: Optional start position in seconds. If omitted, saved progress is used.
+
 resume:
-  name: Resume playback
-  description: Resume current playback. Browser output requires the custom card to be open.
+  name: Resume podcast playback
+  description: Resume the current podcast. Browser playback resumes from the card; external playback resumes through the media player when supported.
   fields: {}
+
 pause:
-  name: Pause playback
-  description: Pause browser/player state or best-effort pause the current external output.
+  name: Pause podcast playback
+  description: Pause the current podcast state or the active external media player when supported.
   fields: {}
+
 stop:
-  name: Stop playback
+  name: Stop podcast playback
   description: Stop the active Podcast Player output.
   fields: {}
+
 stop_output:
-  name: Stop Podcast Player output
-  description: Stop Podcast Player output. No action Target is required. Optional Output media player stops a specific speaker/TV;
-    otherwise the current/last Podcast Player output is stopped.
+  name: Stop podcast output
+  description: Stop the current Podcast Player output, or stop a specific output media player.
   fields:
     media_player_entity_id:
       required: false
       selector:
         entity:
           domain: media_player
-      name: Output media player to stop
-      description: Optional speaker/TV to stop, e.g. media_player.bedroom_tv. Leave empty to stop Podcast Player current/last
-        output.
+      name: Output media player
+      description: Optional media player to stop. Leave empty to stop the current Podcast Player output.
+
 seek:
-  name: Seek episode
-  description: Store a new position and best-effort seek the current external output if supported.
+  name: Seek podcast episode
+  description: Store a new playback position and seek the active external media player when supported.
   fields:
     episode_id:
       required: true
       selector:
         text: {}
       name: Episode ID
+      description: The episode ID to update.
     position:
       required: true
       selector:
         number:
           min: 0
           mode: box
-          unit_of_measurement: s
+          unit_of_measurement: seconds
       name: Position
+      description: The playback position in seconds.
+
 save_progress:
-  name: Save playback progress
-  description: Save playback progress from the browser card or automations.
+  name: Save podcast progress
+  description: Save playback progress from the card or an automation.
   fields:
     episode_id:
       required: true
       selector:
         text: {}
       name: Episode ID
+      description: The episode ID to update.
     position:
       required: true
       selector:
         number:
           min: 0
           mode: box
-          unit_of_measurement: s
+          unit_of_measurement: seconds
       name: Position
+      description: Current playback position in seconds.
     duration:
       required: false
       selector:
         number:
           min: 0
           mode: box
-          unit_of_measurement: s
+          unit_of_measurement: seconds
       name: Duration
+      description: Episode duration in seconds.
     playing:
       required: false
       selector:
         boolean: {}
-      name: Is playing
+      name: Playing
+      description: Whether the episode is currently playing.
     speed:
       required: false
       selector:
         select:
           options:
-          - '0.75'
-          - '1.0'
-          - '1.25'
-          - '1.5'
-          - '1.75'
-          - '2.0'
+            - "0.75"
+            - "1.0"
+            - "1.25"
+            - "1.5"
+            - "1.75"
+            - "2.0"
       name: Playback speed
+      description: Current playback speed.
+
 mark_played:
   name: Mark episode played
   description: Mark one episode as played.
@@ -405,6 +332,8 @@ mark_played:
       selector:
         text: {}
       name: Episode ID
+      description: The episode ID to mark.
+
 mark_unplayed:
   name: Mark episode unplayed
   description: Mark one episode as unplayed.
@@ -414,9 +343,11 @@ mark_unplayed:
       selector:
         text: {}
       name: Episode ID
+      description: The episode ID to mark.
+
 mark_current_played:
-  name: Mark current played/unplayed
-  description: Mark the current episode played or unplayed.
+  name: Mark current episode played
+  description: Mark the current episode as played or unplayed.
   fields:
     played:
       required: false
@@ -424,60 +355,54 @@ mark_current_played:
       selector:
         boolean: {}
       name: Played
+      description: Turn on to mark played, or turn off to mark unplayed.
+
 mark_feed_played:
-  name: Mark feed played/unplayed
-  description: Mark all active episodes in selected Podcast feed sensor target(s), feed_id, or feed_name played/unplayed.
+  name: Mark feed episodes played
+  description: Mark all active episodes from selected podcast feed targets as played or unplayed.
   target:
     entity:
-    - integration: podcast_player
+      integration: podcast_player
       domain: sensor
   fields:
-    feed_id:
-      required: false
-      selector:
-        text: {}
-      name: Feed ID
-      description: Legacy exact feed ID. Prefer selecting a Podcast feed sensor as the action Target in the UI.
     played:
       required: false
       default: true
       selector:
         boolean: {}
       name: Played
-    feed_name:
-      required: false
-      selector:
-        text: {}
-      name: Feed name
-      description: Friendly fallback, e.g. Candace or Joe Rogan. Target entity wins if a Podcast feed sensor is selected.
+      description: Turn on to mark played, or turn off to mark unplayed.
+
 set_speed:
-  name: Set playback speed
-  description: Set browser playback speed preference and optional episode speed.
+  name: Set podcast playback speed
+  description: Set the default playback speed and optionally update one episode.
   fields:
     speed:
       required: true
       selector:
         select:
           options:
-          - '0.75'
-          - '1.0'
-          - '1.25'
-          - '1.5'
-          - '1.75'
-          - '2.0'
+            - "0.75"
+            - "1.0"
+            - "1.25"
+            - "1.5"
+            - "1.75"
+            - "2.0"
       name: Playback speed
+      description: The playback speed to use.
     episode_id:
       required: false
       selector:
         text: {}
       name: Episode ID
+      description: Optional episode ID to update.
+
 play_on_media_player:
-  name: Play on media player
-  description: Send current/latest/next-unplayed podcast audio to a real HA media_player. Action Target selects Podcast feed
-    sensor(s); Output media player selects the speaker/TV.
+  name: Play podcast on media player
+  description: Send current, latest, next-unplayed, or selected podcast audio to a Home Assistant media player.
   target:
     entity:
-    - integration: podcast_player
+      integration: podcast_player
       domain: sensor
   fields:
     media_player_entity_id:
@@ -485,53 +410,45 @@ play_on_media_player:
       selector:
         entity:
           domain: media_player
-      name: Output media player (speaker/TV)
-      description: Required speaker/TV output, e.g. media_player.bedroom_tv. The action Target above remains the podcast feed
-        sensor.
+      name: Output media player
+      description: The Home Assistant media player that should play the podcast.
     episode_id:
       required: false
       selector:
         text: {}
       name: Episode ID
-      description: Optional. If provided, this exact episode is sent.
-    feed_id:
-      required: false
-      selector:
-        text: {}
-      name: Feed ID
-      description: Legacy exact feed ID. Prefer selecting a Podcast feed sensor as the action Target in the UI.
+      description: Optional exact episode ID. If set, episode choice and feed targets are ignored.
     episode_mode:
       required: false
       default: current
       selector:
         select:
           options:
-          - current
-          - next_unplayed
-          - latest
+            - current
+            - next_unplayed
+            - latest
       name: Episode choice
-      description: If no episode_id is provided, choose current episode first, next unplayed, or latest.
+      description: Which episode to send when no exact episode ID is provided.
     url_mode:
       required: false
       default: direct
       selector:
         select:
           options:
-          - direct
-          - signed_proxy
+            - direct
+            - signed_proxy
       name: URL mode
-      description: Direct sends the original podcast URL. Signed proxy sends a temporary Home Assistant proxy URL for speakers
-        that cannot reach the original URL.
+      description: Use the original podcast URL, or a temporary Home Assistant proxy URL for media players that need it.
     media_content_type:
       required: false
       default: music
       selector:
         select:
           options:
-          - music
-          - podcast
+            - music
+            - podcast
       name: Media content type
-      description: Most speakers/TVs work best with music. Try podcast only if a target handles it better.
+      description: Most media players work best with music. Use podcast only if the target handles it better.
     resume_position:
       required: false
       selector:
@@ -540,34 +457,12 @@ play_on_media_player:
           mode: box
           unit_of_measurement: seconds
       name: Resume position
-      description: Optional seconds offset to start from. If omitted, Podcast Player uses stored progress for the selected
-        episode.
-    prefer_proxy:
-      required: false
-      default: false
-      selector:
-        boolean: {}
-      name: Prefer HA proxy URL legacy option
-      description: Legacy option. If true, url_mode becomes signed_proxy.
-    feed_name:
-      required: false
-      selector:
-        text: {}
-      name: Feed name
-      description: Friendly fallback, e.g. Candace or Joe Rogan. Target entity wins if a Podcast feed sensor is selected.
+      description: Optional start position in seconds. If omitted, saved progress is used.
+
 stop_media_player:
-  name: Stop media player output
-  description: Stop a media_player used for podcast output. For this stop service only, select the media_player as the action
-    Target, or use media_player_entity_id for backward-compatible YAML.
+  name: Stop podcast media player
+  description: Stop a media player used for podcast output.
   target:
     entity:
       domain: media_player
-  fields:
-    media_player_entity_id:
-      required: false
-      selector:
-        entity:
-          domain: media_player
-      name: Output media player to stop
-      description: Backward-compatible YAML field. Prefer selecting the media_player as action Target for this stop service
-        only.
+  fields: {}

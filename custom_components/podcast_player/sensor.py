@@ -105,7 +105,7 @@ class PodcastFeedSensor(PodcastBaseSensor):
     Assistant creates readable entity IDs like
     ``sensor.podcast_feed_the_joe_rogan_experience``. Services can then use the
     normal ``target.entity_id`` dropdown to select the podcast, while the output
-    speaker/TV remains a normal data field named ``media_player_entity_id``.
+    output media player remains a normal data field named ``media_player_entity_id``.
     """
 
     _attr_has_entity_name = False

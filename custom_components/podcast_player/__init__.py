@@ -47,7 +47,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Home Assistant service targets are exposed as data["entity_id"] for these
 # custom services. Feed-selecting services use podcast feed sensor entities as
-# the target; the output speaker/TV remains media_player_entity_id in data.
+# the target; the output media player remains media_player_entity_id in data.
 _SERVICE_TARGET_ENTITY = vol.Any(cv.entity_id, [cv.entity_id], None)
 
 _SERVICE_FEED_FIELDS = {
@@ -201,10 +201,10 @@ def _target_contains_media_player(data: dict[str, Any]) -> bool:
 
 
 def _raise_media_player_target_help(service_hint: str) -> None:
-    """Raise a clear error when a speaker/TV was put in the wrong target field."""
+    """Raise a clear error when an output media player was put in the wrong target field."""
     raise HomeAssistantError(
         f"{service_hint}: action Target selects the podcast feed sensor. "
-        "Put the speaker/TV in data.media_player_entity_id instead. "
+        "Put the output media player in data.media_player_entity_id instead. "
         "Example: target.entity_id = sensor.house_podcast_player_podcast_feed_candace, "
         "data.media_player_entity_id = media_player.bedroom_tv."
     )

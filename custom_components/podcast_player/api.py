@@ -501,7 +501,7 @@ class PodcastSpeakerProxyView(HomeAssistantView):
 
 
 class PodcastSpeakerArtworkProxyView(HomeAssistantView):
-    """Signed no-login proxy for speaker/TV artwork.
+    """Signed no-login proxy for output media player artwork.
 
     This is intentionally limited to stored episode IDs and short-lived signed
     tokens. It lets DLNA/Chromecast/Sonos-like devices fetch artwork from a
