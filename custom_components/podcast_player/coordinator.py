@@ -23,6 +23,7 @@ from .const import (
     EVENT_NEW_EPISODE,
     EVENT_PLAYBACK_PAUSED,
     EVENT_PLAYBACK_STARTED,
+    PLAYER_ENTITY_ID,
     USER_AGENT,
 )
 from .feed_parser import PodcastParseError, parse_podcast_feed
@@ -34,6 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 MAX_FEED_BODY_BYTES = 10 * 1024 * 1024
 FEED_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=20)
 MAX_PARALLEL_REFRESHES = 4
+UNAVAILABLE_MEDIA_PLAYER_STATES = {"unavailable", "unknown", "off"}
 
 
 @dataclass
@@ -218,12 +220,22 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         player = self.storage.data["player"]
         episode_id = player.get("current_episode_id")
         if player.get("output_mode") == "speaker" and player.get("target_media_player"):
-            await self.hass.services.async_call(
-                "media_player",
-                "media_pause",
-                {"entity_id": player.get("target_media_player")},
-                blocking=False,
-            )
+            target = str(player.get("target_media_player"))
+            try:
+                self._validate_media_player_control_target(target, "pause")
+                await self.hass.services.async_call(
+                    "media_player",
+                    "media_pause",
+                    {"entity_id": target},
+                    blocking=True,
+                )
+            except HomeAssistantError as err:
+                await self._handle_active_target_control_error(target, err)
+                raise
+            except Exception as err:  # noqa: BLE001
+                message = f"Target media player rejected pause: {err}"
+                await self._store_speaker_error(message)
+                raise HomeAssistantError(message) from err
         self.storage.set_player_state("paused")
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -243,6 +255,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_seek_media_player(self, entity_id: str, position: float) -> bool:
         """Best-effort seek for an external media_player using HA's public service API."""
         seek_position = float(position)
+        try:
+            self._validate_media_player_control_target(entity_id, "seek")
+        except HomeAssistantError as err:
+            _LOGGER.debug("Podcast Player skipped media_seek target=%s position=%s: %s", entity_id, seek_position, err)
+            return False
         try:
             await self.hass.services.async_call(
                 "media_player",
@@ -264,7 +281,14 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and player.get("target_media_player")
             and player.get("current_episode_id") == episode_id
         ):
-            await self._async_seek_media_player(str(player.get("target_media_player")), float(position))
+            target = str(player.get("target_media_player"))
+            seek_sent = await self._async_seek_media_player(target, float(position))
+            if not seek_sent and self._target_is_unavailable_or_missing(target):
+                await self._clear_active_speaker_target(
+                    target,
+                    f"Target media player is not available for seek: {target}",
+                )
+                player = self.storage.data["player"]
         self.storage.save_progress(episode_id, position, playing=player.get("state") == "playing")
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -311,12 +335,24 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             episode_id = episode.get("episode_id") if episode else None
 
         if player.get("output_mode") == "speaker" and player.get("target_media_player"):
-            await self.hass.services.async_call(
-                "media_player",
-                "media_play",
-                {"entity_id": player.get("target_media_player")},
-                blocking=False,
-            )
+            target = str(player.get("target_media_player"))
+            if not episode_id:
+                raise HomeAssistantError("No podcast episode available to resume")
+            try:
+                self._validate_media_player_control_target(target, "resume")
+                await self.hass.services.async_call(
+                    "media_player",
+                    "media_play",
+                    {"entity_id": target},
+                    blocking=True,
+                )
+            except HomeAssistantError as err:
+                await self._handle_active_target_control_error(target, err)
+                raise
+            except Exception as err:  # noqa: BLE001
+                message = f"Target media player rejected resume: {err}"
+                await self._store_speaker_error(message)
+                raise HomeAssistantError(message) from err
             self.storage.set_player_state("playing", episode_id)
             await self.storage.async_save()
             self.async_set_updated_data(self.storage.snapshot())
@@ -515,6 +551,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not target:
             _LOGGER.warning("Podcast Player stop requested, but no target media player is known")
             return
+        target = str(target)
+        if not self._is_external_media_player_entity_id(target):
+            message = f"Target must be an external media_player entity: {target}"
+            await self._store_speaker_error(message)
+            raise HomeAssistantError(message)
 
         state = self.hass.states.get(target)
         target_name = state.name if state is not None else target
@@ -538,6 +579,13 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 stopped = True
                 _LOGGER.info("Podcast Player clearing unavailable active target=%s", target)
         if not stopped:
+            if state is None:
+                player["last_target_media_player"] = target
+                player["last_target_media_player_name"] = target_name
+                player["speaker_last_error"] = "; ".join(errors)
+                await self.storage.async_save()
+                self.async_set_updated_data(self.storage.snapshot())
+                raise HomeAssistantError(player["speaker_last_error"])
             try:
                 await self.hass.services.async_call(
                     "media_player",
@@ -574,16 +622,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _validate_media_player_output_target(self, entity_id: str) -> Any:
         """Validate that a media_player target is safe to use for podcast output."""
-        if not entity_id.startswith("media_player."):
-            raise HomeAssistantError("Target must be a media_player entity")
-
-        target_state = self.hass.states.get(entity_id)
-        if target_state is None:
-            raise HomeAssistantError(f"Target media player not found: {entity_id}")
-
-        state = str(target_state.state)
-        if state in {"unavailable", "unknown", "off"}:
-            raise HomeAssistantError(f"Target media player is not available for playback: {entity_id} is {state}")
+        target_state = self._validate_media_player_control_target(entity_id, "playback")
 
         try:
             from homeassistant.components.media_player import MediaPlayerEntityFeature
@@ -599,6 +638,58 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pass
 
         return target_state
+
+    def _is_external_media_player_entity_id(self, entity_id: str) -> bool:
+        """Return true for real output media_player entities."""
+        return entity_id.startswith("media_player.") and entity_id != PLAYER_ENTITY_ID
+
+    def _validate_media_player_control_target(self, entity_id: str, action: str) -> Any:
+        """Validate a target before calling a Home Assistant media_player service."""
+        if not self._is_external_media_player_entity_id(entity_id):
+            raise HomeAssistantError("Target must be an external media_player entity")
+
+        target_state = self.hass.states.get(entity_id)
+        if target_state is None:
+            raise HomeAssistantError(f"Target media player not found: {entity_id}")
+
+        state = str(target_state.state)
+        if state in UNAVAILABLE_MEDIA_PLAYER_STATES:
+            raise HomeAssistantError(f"Target media player is not available for {action}: {entity_id} is {state}")
+
+        return target_state
+
+    def _target_is_unavailable_or_missing(self, entity_id: str) -> bool:
+        """Return true if a target should not receive media_player service calls."""
+        if not self._is_external_media_player_entity_id(entity_id):
+            return True
+        target_state = self.hass.states.get(entity_id)
+        return target_state is None or str(target_state.state) in UNAVAILABLE_MEDIA_PLAYER_STATES
+
+    async def _handle_active_target_control_error(self, target: str, err: HomeAssistantError) -> None:
+        """Clear stale active speaker state when a known target is gone."""
+        if target == self.storage.data["player"].get("target_media_player") and self._target_is_unavailable_or_missing(target):
+            await self._clear_active_speaker_target(target, str(err))
+            return
+        await self._store_speaker_error(str(err))
+
+    async def _clear_active_speaker_target(self, target: str, reason: str) -> None:
+        """Clear local active-speaker state without calling an unavailable target."""
+        player = self.storage.data["player"]
+        target_state = self.hass.states.get(target)
+        target_name = target_state.name if target_state is not None else target
+        player["last_target_media_player"] = target
+        player["last_target_media_player_name"] = target_name
+        self.storage.set_player_state("idle")
+        self._set_browser_output(player)
+        player["speaker_last_error"] = reason
+        await self.storage.async_save()
+        self.async_set_updated_data(self.storage.snapshot())
+
+    async def _store_speaker_error(self, message: str) -> None:
+        """Persist the last speaker-control error."""
+        self.storage.data["player"]["speaker_last_error"] = message
+        await self.storage.async_save()
+        self.async_set_updated_data(self.storage.snapshot())
 
     def _select_episode_for_output(
         self,

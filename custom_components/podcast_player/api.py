@@ -13,7 +13,14 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN, HTTP_PROXY_URL, HTTP_SPEAKER_ARTWORK_PROXY_URL, HTTP_SPEAKER_PROXY_URL, USER_AGENT
+from .const import (
+    DOMAIN,
+    HTTP_PROXY_URL,
+    HTTP_SPEAKER_ARTWORK_PROXY_URL,
+    HTTP_SPEAKER_PROXY_URL,
+    PLAYER_ENTITY_ID,
+    USER_AGENT,
+)
 from .coordinator import PodcastRuntime
 from .speaker_proxy import ensure_proxy_secret, verify_proxy_token
 
@@ -105,7 +112,6 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
         MediaPlayerEntityFeature = None  # type: ignore[assignment]
         er = None  # type: ignore[assignment]
 
-    current_entity = "media_player.podcast_player"
     registry = er.async_get(hass) if er is not None else None
     targets: list[dict[str, Any]] = []
     states = getattr(hass, "states", None)
@@ -114,7 +120,7 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
 
     for state in states.async_all("media_player"):
         entity_id = state.entity_id
-        if entity_id == current_entity:
+        if entity_id == PLAYER_ENTITY_ID:
             continue
         attrs = dict(state.attributes or {})
         friendly = attrs.get("friendly_name") or entity_id.replace("media_player.", "")
@@ -129,7 +135,7 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
         entry = registry.async_get(entity_id) if registry is not None else None
         platform = getattr(entry, "platform", None) if entry else None
         features = int(attrs.get("supported_features") or 0)
-        live_state = str(state.state or "unknown") not in {"unknown", "unavailable"}
+        live_state = str(state.state or "unknown") not in {"unknown", "unavailable", "off"}
         progress = live_state and any(k in attrs for k in ("media_position", "media_duration", "media_position_updated_at"))
 
         can_seek = False
@@ -140,7 +146,7 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
             can_seek = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "SEEK", 0))
             can_pause = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "PAUSE", 0))
             can_stop = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "STOP", 0))
-            can_play_media = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "PLAY_MEDIA", 0)) or True
+            can_play_media = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "PLAY_MEDIA", 0)) if features else True
 
         is_dlna = platform == "dlna_dmr"
         limited = not live_state or (is_dlna and not progress)
