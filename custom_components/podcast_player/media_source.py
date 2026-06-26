@@ -19,6 +19,8 @@ from .const import DOMAIN, NAME
 from .coordinator import PodcastRuntime
 from .speaker_proxy import make_signed_speaker_proxy_url
 
+FEEDS_IDENTIFIER = "feeds"
+LATEST_LIMIT = 25
 ROOT_CATEGORIES = {
     "latest": "Latest episodes",
     "unplayed": "Unplayed episodes",
@@ -64,12 +66,19 @@ class PodcastMediaSource(MediaSource):
         if not episode:
             raise Unresolvable("Podcast episode was not found")
 
-        settings = runtime.storage.data["settings"]
         direct_url = episode.get("audio_url")
-        proxy_url = make_signed_speaker_proxy_url(self.hass, settings, episode_id)
-        url = direct_url if settings.get("direct_first", True) else proxy_url or direct_url
-        if not url:
+        if not direct_url:
             raise Unresolvable("Podcast episode has no playable audio URL")
+
+        settings = runtime.storage.data["settings"]
+        url = direct_url
+        if not settings.get("direct_first", True):
+            secret_before = settings.get("speaker_proxy_secret")
+            proxy_url = make_signed_speaker_proxy_url(self.hass, settings, episode_id)
+            if proxy_url:
+                url = proxy_url
+                if not secret_before and settings.get("speaker_proxy_secret"):
+                    await runtime.storage.async_save()
 
         return PlayMedia(url=url, mime_type=episode.get("audio_type") or "audio/mpeg")
 
@@ -85,6 +94,9 @@ class PodcastMediaSource(MediaSource):
 
         if parts[0] in ROOT_CATEGORIES:
             return self._episode_list(runtime, parts[0])
+
+        if parts[0] == FEEDS_IDENTIFIER and len(parts) == 1:
+            return self._feeds(runtime)
 
         if parts[0] == "feed" and len(parts) >= 2:
             feed_id = parts[1]
@@ -104,6 +116,28 @@ class PodcastMediaSource(MediaSource):
             self._directory(identifier, title)
             for identifier, title in ROOT_CATEGORIES.items()
         ]
+        children.append(
+            self._directory(
+                FEEDS_IDENTIFIER,
+                "Feeds",
+                children_media_class=MediaClass.PODCAST,
+            )
+        )
+        return BrowseMediaSource(
+            domain=DOMAIN,
+            identifier=None,
+            media_class=MediaClass.APP,
+            media_content_type=MediaType.APP,
+            title=NAME,
+            can_play=False,
+            can_expand=True,
+            children_media_class=MediaClass.DIRECTORY,
+            children=children,
+        )
+
+    def _feeds(self, runtime: PodcastRuntime) -> BrowseMediaSource:
+        """Return the feeds directory."""
+        children = []
         for feed in sorted(runtime.storage.enabled_feeds(), key=lambda item: str(item.get("title") or "").casefold()):
             feed_id = feed.get("feed_id")
             if not feed_id:
@@ -118,13 +152,13 @@ class PodcastMediaSource(MediaSource):
             )
         return BrowseMediaSource(
             domain=DOMAIN,
-            identifier=None,
-            media_class=MediaClass.APP,
-            media_content_type=MediaType.APP,
-            title=NAME,
+            identifier=FEEDS_IDENTIFIER,
+            media_class=MediaClass.DIRECTORY,
+            media_content_type=MediaType.PODCAST,
+            title="Feeds",
             can_play=False,
             can_expand=True,
-            children_media_class=MediaClass.DIRECTORY,
+            children_media_class=MediaClass.PODCAST,
             children=children,
         )
 
@@ -132,7 +166,11 @@ class PodcastMediaSource(MediaSource):
         """Return one feed directory."""
         feed_id = feed["feed_id"]
         children = [
-            self._directory(f"feed/{feed_id}/{identifier}", title)
+            self._directory(
+                f"feed/{feed_id}/{identifier}",
+                title,
+                thumbnail=feed.get("artwork_url"),
+            )
             for identifier, title in ROOT_CATEGORIES.items()
         ]
         return BrowseMediaSource(
@@ -159,8 +197,10 @@ class PodcastMediaSource(MediaSource):
         """Return an episode list."""
         episodes = runtime.coordinator.active_episodes(feed_id)
         progress = runtime.storage.data["progress"]
+        not_shown = 0
         if category == "latest":
-            episodes = episodes[:25]
+            not_shown = max(0, len(episodes) - LATEST_LIMIT)
+            episodes = episodes[:LATEST_LIMIT]
         elif category == "unplayed":
             episodes = [episode for episode in episodes if not progress.get(episode.get("episode_id"), {}).get("played")]
         elif category == "in_progress":
@@ -184,7 +224,11 @@ class PodcastMediaSource(MediaSource):
             can_play=False,
             can_expand=True,
             children_media_class=MediaClass.EPISODE,
-            children=[self._episode(runtime, episode) for episode in episodes],
+            not_shown=not_shown,
+            children=[
+                self._episode(runtime, episode, include_feed_title=feed_id is None)
+                for episode in episodes
+            ],
         )
 
     def _directory(
@@ -194,6 +238,7 @@ class PodcastMediaSource(MediaSource):
         *,
         thumbnail: str | None = None,
         media_class: MediaClass = MediaClass.DIRECTORY,
+        children_media_class: MediaClass = MediaClass.EPISODE,
     ) -> BrowseMediaSource:
         """Return a directory node."""
         return BrowseMediaSource(
@@ -205,19 +250,26 @@ class PodcastMediaSource(MediaSource):
             can_play=False,
             can_expand=True,
             thumbnail=thumbnail,
-            children_media_class=MediaClass.EPISODE,
+            children_media_class=children_media_class,
         )
 
-    def _episode(self, runtime: PodcastRuntime, episode: dict[str, Any]) -> BrowseMediaSource:
+    def _episode(
+        self,
+        runtime: PodcastRuntime,
+        episode: dict[str, Any],
+        *,
+        include_feed_title: bool = False,
+    ) -> BrowseMediaSource:
         """Return an episode node."""
         feed = runtime.storage.get_feed(episode.get("feed_id")) or {}
-        title = episode.get("title") or "Untitled episode"
         episode_id = episode["episode_id"]
+        progress = runtime.storage.data["progress"].get(episode_id, {})
+        title = _episode_display_title(episode, feed, progress, include_feed_title=include_feed_title)
         return BrowseMediaSource(
             domain=DOMAIN,
             identifier=f"episode/{episode_id}",
             media_class=MediaClass.EPISODE,
-            media_content_type=MediaType.PODCAST,
+            media_content_type=MediaType.EPISODE,
             title=title,
             can_play=True,
             can_expand=False,
@@ -230,6 +282,40 @@ def _parts(identifier: str | None) -> list[str]:
     if not identifier:
         return []
     return [part for part in str(identifier).strip("/").split("/") if part]
+
+
+def _episode_display_title(
+    episode: dict[str, Any],
+    feed: dict[str, Any],
+    progress: dict[str, Any],
+    *,
+    include_feed_title: bool,
+) -> str:
+    """Return the media browser title for an episode."""
+    title = str(episode.get("title") or "Untitled episode")
+    feed_title = str(feed.get("title") or "")
+    if include_feed_title and feed_title:
+        title = f"{title} — {feed_title}"
+    duration = _duration_label(progress.get("duration") or episode.get("duration_seconds"))
+    if duration:
+        title = f"{title} ({duration})"
+    return title
+
+
+def _duration_label(value: Any) -> str | None:
+    """Return a compact duration label."""
+    try:
+        seconds = int(float(value or 0))
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
 
 
 def media_source_id_for_episode(episode_id: str) -> str:

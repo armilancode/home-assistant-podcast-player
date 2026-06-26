@@ -2,8 +2,6 @@
 
 Podcast Player is a Home Assistant custom integration for RSS podcast feeds, playback progress, and playback on Home Assistant media players.
 
-The first release target is a stable HACS beta. The integration is designed to follow Home Assistant architecture patterns so it can be evaluated for a future Home Assistant Core contribution.
-
 ## Current status
 
 Alpha-stage custom integration. It is useful for early validation, but it is not yet ready for broad public installation.
@@ -13,18 +11,19 @@ Implemented today:
 - RSS feed parsing and local library storage.
 - Podcast feed, library, playback, and progress entities.
 - Service actions for adding feeds, refreshing feeds, playback, progress, and marking episodes played.
+- Media Browser support through Home Assistant media sources.
 - Companion Lovelace card under `www/podcast-player-card/`.
 - Signed proxy routes for media players that need a Home Assistant URL.
 
 Roadmap:
 
-- Home Assistant `media_source` support for Media Browser playback.
-- Safer media-player output based on official `media_player.play_media` behavior.
+- Broader Media Browser browsing and playback coverage.
+- Safer media-player output behavior and clearer playback errors.
 - Robust config flows, diagnostics, translations, and automated tests.
 
-## HACS beta installation
+## HACS installation
 
-Once alpha validation passes:
+For HACS testing:
 
 1. Add this repository to HACS as a custom repository of type `Integration`.
 2. Install **Podcast Player**.
