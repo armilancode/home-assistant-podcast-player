@@ -4,41 +4,64 @@
     "step": {
       "user": {
         "title": "Set up Podcast Player",
-        "description": "Create the Podcast Player integration. Feeds can be added from the dashboard card and service actions during the HACS alpha."
-      },
-      "init": {
-        "title": "Podcast Player options",
+        "description": "Create the Podcast Player integration. You can add a first podcast feed now, or add feeds later from integration options and actions.",
         "data": {
+          "initial_rss_url": "First podcast RSS URL",
           "refresh_interval_minutes": "Refresh interval",
           "max_episodes_per_feed": "Maximum cached episodes per feed",
-          "direct_first": "Prefer direct podcast URLs for media players"
+          "default_playback_speed": "Default playback speed",
+          "played_threshold": "Played threshold",
+          "url_mode_preference": "Media player URL preference"
         },
         "data_description": {
+          "initial_rss_url": "Optional. Paste a podcast RSS feed URL to add it during setup.",
           "refresh_interval_minutes": "How often Podcast Player refreshes RSS feeds, in minutes.",
           "max_episodes_per_feed": "How many recent episodes to keep cached per feed. Listening progress is preserved when old cached episodes are trimmed.",
-          "direct_first": "Use original podcast audio URLs first. Turn this off to prefer signed Home Assistant proxy URLs when available."
+          "default_playback_speed": "Default speed used for podcast playback.",
+          "played_threshold": "Fraction of an episode that must be listened to before it is marked played.",
+          "url_mode_preference": "Direct sends the original podcast audio URL. Signed proxy uses a temporary Home Assistant URL for media players that cannot reach the original URL."
         }
       }
     },
     "abort": {
       "already_configured": "Podcast Player is already configured."
+    },
+    "error": {
+      "invalid_url": "Enter a valid RSS URL starting with http:// or https://."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Podcast Player options",
+        "description": "Update playback settings, add a podcast feed, or remove an existing feed.",
         "data": {
           "refresh_interval_minutes": "Refresh interval",
           "max_episodes_per_feed": "Maximum cached episodes per feed",
-          "direct_first": "Prefer direct podcast URLs for media players"
+          "default_playback_speed": "Default playback speed",
+          "played_threshold": "Played threshold",
+          "url_mode_preference": "Media player URL preference",
+          "new_feed_url": "Add podcast RSS URL",
+          "remove_feed_id": "Remove podcast feed",
+          "remove_feed_keep_history": "Keep listening history when removing"
         },
         "data_description": {
           "refresh_interval_minutes": "How often Podcast Player refreshes RSS feeds, in minutes.",
           "max_episodes_per_feed": "How many recent episodes to keep cached per feed. Listening progress is preserved when old cached episodes are trimmed.",
-          "direct_first": "Use original podcast audio URLs first. Turn this off to prefer signed Home Assistant proxy URLs when available."
+          "default_playback_speed": "Default speed used for podcast playback.",
+          "played_threshold": "Fraction of an episode that must be listened to before it is marked played.",
+          "url_mode_preference": "Direct sends the original podcast audio URL. Signed proxy uses a temporary Home Assistant URL for media players that cannot reach the original URL.",
+          "new_feed_url": "Optional. Paste a podcast RSS feed URL to add it.",
+          "remove_feed_id": "Optional. Choose a feed to remove.",
+          "remove_feed_keep_history": "If enabled, episode progress is preserved after the feed is removed."
         }
       }
+    },
+    "error": {
+      "cannot_add_feed": "Could not add this podcast feed. Check the URL and try again.",
+      "feed_not_found": "The selected feed could not be found.",
+      "invalid_url": "Enter a valid RSS URL starting with http:// or https://.",
+      "not_loaded": "Podcast Player is not loaded yet. Try again after Home Assistant finishes starting."
     }
   }
 }

@@ -16,6 +16,7 @@ STORAGE_KEY = f"{DOMAIN}.library"
 STORAGE_VERSION = 1
 
 DEFAULT_REFRESH_INTERVAL = timedelta(hours=2)
+DEFAULT_REFRESH_INTERVAL_MINUTES = 120
 DEFAULT_MAX_EPISODES_PER_FEED = 100
 DEFAULT_PLAYED_THRESHOLD = 0.95
 DEFAULT_PLAYBACK_SPEED = 1.0
@@ -57,7 +58,19 @@ SERVICE_SET_SPEED = "set_speed"
 
 ALLOWED_SPEEDS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 
-CONF_REFRESH_INTERVAL = "refresh_interval"
+CONF_DEFAULT_PLAYBACK_SPEED = "default_playback_speed"
+CONF_DIRECT_FIRST = "direct_first"
+CONF_INITIAL_RSS_URL = "initial_rss_url"
+CONF_MAX_EPISODES_PER_FEED = "max_episodes_per_feed"
+CONF_NEW_FEED_URL = "new_feed_url"
+CONF_PLAYED_THRESHOLD = "played_threshold"
+CONF_REFRESH_INTERVAL_MINUTES = "refresh_interval_minutes"
+CONF_REMOVE_FEED_ID = "remove_feed_id"
+CONF_REMOVE_FEED_KEEP_HISTORY = "remove_feed_keep_history"
+CONF_URL_MODE_PREFERENCE = "url_mode_preference"
+
+URL_MODE_DIRECT = "direct"
+URL_MODE_SIGNED_PROXY = "signed_proxy"
 
 HTTP_PROXY_URL = "/api/podcast_player/proxy/{episode_id}"
 HTTP_SPEAKER_PROXY_URL = "/api/podcast_player/speaker_proxy/{episode_id}"

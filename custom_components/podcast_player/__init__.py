@@ -14,6 +14,7 @@ from homeassistant.helpers import config_validation as cv
 from .api import async_register_api
 from .const import (
     ALLOWED_SPEEDS,
+    CONF_INITIAL_RSS_URL,
     DOMAIN,
     PLATFORMS,
     SERVICE_ADD_FEED,
@@ -40,7 +41,7 @@ from .const import (
 )
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
 from .feed_parser import PodcastParseError
-from .storage import PodcastStorage
+from .storage import PodcastStorage, make_feed_id, normalize_rss_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -120,6 +121,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_register_api(hass)
     async_register_services(hass)
 
+    await _async_import_initial_feed(hass, entry, runtime)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Do an initial non-blocking refresh shortly after startup if feeds exist.
@@ -129,6 +132,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
     return True
+
+
+async def _async_import_initial_feed(hass: HomeAssistant, entry: ConfigEntry, runtime: PodcastRuntime) -> None:
+    """Add the optional first feed captured by the config flow."""
+    initial_rss_url = entry.data.get(CONF_INITIAL_RSS_URL)
+    if not initial_rss_url:
+        return
+
+    try:
+        normalized_url = normalize_rss_url(initial_rss_url)
+        feed_id = make_feed_id(normalized_url)
+        if not runtime.storage.get_feed(feed_id):
+            await runtime.coordinator.async_add_feed(normalized_url)
+    except (PodcastParseError, ValueError) as err:
+        message = err.message if isinstance(err, PodcastParseError) else str(err)
+        _LOGGER.warning("Could not add initial podcast feed: %s", message)
+    finally:
+        data = dict(entry.data)
+        data.pop(CONF_INITIAL_RSS_URL, None)
+        hass.config_entries.async_update_entry(entry, data=data)
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:

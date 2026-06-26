@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 import aiohttp
@@ -13,10 +14,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from yarl import URL
 
 from .const import (
-    DEFAULT_REFRESH_INTERVAL,
+    CONF_REFRESH_INTERVAL_MINUTES,
+    DEFAULT_REFRESH_INTERVAL_MINUTES,
     EVENT_EPISODE_COMPLETED,
     EVENT_FEED_ADDED,
     EVENT_FEED_REFRESH_FAILED,
@@ -28,7 +29,7 @@ from .const import (
 )
 from .feed_parser import PodcastParseError, parse_podcast_feed
 from .speaker_proxy import make_signed_speaker_artwork_proxy_url, make_signed_speaker_proxy_url
-from .storage import PodcastStorage, make_feed_id, utcnow_iso
+from .storage import PodcastStorage, make_feed_id, normalize_rss_url, utcnow_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +37,16 @@ MAX_FEED_BODY_BYTES = 10 * 1024 * 1024
 FEED_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=20)
 MAX_PARALLEL_REFRESHES = 4
 UNAVAILABLE_MEDIA_PLAYER_STATES = {"unavailable", "unknown", "off"}
+
+
+def refresh_interval_from_settings(settings: dict[str, Any]) -> timedelta:
+    """Return a safe refresh interval from persisted settings."""
+    try:
+        minutes = int(settings.get(CONF_REFRESH_INTERVAL_MINUTES, DEFAULT_REFRESH_INTERVAL_MINUTES))
+    except (TypeError, ValueError):
+        minutes = DEFAULT_REFRESH_INTERVAL_MINUTES
+    minutes = min(1440, max(15, minutes))
+    return timedelta(minutes=minutes)
 
 
 @dataclass
@@ -55,7 +66,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name="Podcast Player",
-            update_interval=DEFAULT_REFRESH_INTERVAL,
+            update_interval=refresh_interval_from_settings(storage.data["settings"]),
             config_entry=entry,
         )
         self.storage = storage
@@ -94,9 +105,10 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_add_feed(self, rss_url: str) -> dict[str, Any]:
         """Add and immediately refresh a feed."""
-        rss_url = str(URL(rss_url.strip()))
-        if not rss_url.lower().startswith(("http://", "https://")):
-            raise PodcastParseError("invalid_url", "RSS URL must start with http:// or https://")
+        try:
+            rss_url = normalize_rss_url(rss_url)
+        except ValueError as err:
+            raise PodcastParseError("invalid_url", str(err)) from err
         feed_id = make_feed_id(rss_url)
         result = await self._async_refresh_single_url(feed_id, rss_url)
         was_new = self.storage.upsert_feed(result["feed"])

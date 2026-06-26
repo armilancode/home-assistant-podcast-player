@@ -10,12 +10,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from yarl import URL
 
 from .const import (
     ALLOWED_SPEEDS,
     DEFAULT_MAX_EPISODES_PER_FEED,
     DEFAULT_PLAYBACK_SPEED,
     DEFAULT_PLAYED_THRESHOLD,
+    DEFAULT_REFRESH_INTERVAL_MINUTES,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
@@ -40,6 +42,14 @@ def normalize_url_for_id(url: str) -> str:
     return urlunsplit((scheme, netloc, path, parts.query, ""))
 
 
+def normalize_rss_url(rss_url: str) -> str:
+    """Normalize and validate an RSS URL for storage and feed IDs."""
+    value = str(URL(str(rss_url or "").strip()))
+    if not value.lower().startswith(("http://", "https://")):
+        raise ValueError("RSS URL must start with http:// or https://")
+    return value
+
+
 def make_feed_id(rss_url: str) -> str:
     """Return stable feed id."""
     return f"feed_{stable_hash(normalize_url_for_id(rss_url))}"
@@ -61,7 +71,7 @@ def default_data() -> dict[str, Any]:
     return {
         "schema_version": STORAGE_VERSION,
         "settings": {
-            "refresh_interval_minutes": 120,
+            "refresh_interval_minutes": DEFAULT_REFRESH_INTERVAL_MINUTES,
             "default_playback_speed": DEFAULT_PLAYBACK_SPEED,
             "played_threshold": DEFAULT_PLAYED_THRESHOLD,
             "max_episodes_per_feed": DEFAULT_MAX_EPISODES_PER_FEED,
