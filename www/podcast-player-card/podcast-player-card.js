@@ -1606,9 +1606,9 @@ class PodcastPlayerCard extends HTMLElement {
       .title { font-size: 1.3rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .counts, .muted { color: var(--secondary-text-color); font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 12px; min-width: 0; }
-      input, select { border: 1px solid var(--divider-color); border-radius: 10px; background: var(--card-background-color); color: var(--primary-text-color); padding: 10px; min-width: 0; }
+      input, select { border: 1px solid color-mix(in srgb, var(--divider-color) 84%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--card-background-color) 88%, var(--primary-background-color) 12%); color: var(--primary-text-color); padding: 10px; min-width: 0; }
       button { border: 0; border-radius: 10px; padding: 10px 12px; cursor: pointer; background: var(--primary-color); color: var(--text-primary-color); font-weight: 600; }
-      button.secondary { background: var(--secondary-background-color); color: var(--primary-text-color); }
+      button.secondary { background: color-mix(in srgb, var(--secondary-background-color) 80%, var(--card-background-color) 20%); color: var(--primary-text-color); }
       button.danger { background: var(--error-color); color: white; }
       button.icon { min-width: 42px; }
       button:disabled { opacity: .45; cursor: default; }
@@ -1664,19 +1664,34 @@ class PodcastPlayerCard extends HTMLElement {
       .avatar { width: 42px; height: 42px; border-radius: 10px; overflow: hidden; display: grid; place-items: center; background: var(--secondary-background-color); flex: 0 0 auto; }
       .avatar .fallback { font-size: 20px; }
       .feed-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; border-radius: 999px; padding: 3px 8px; background: color-mix(in srgb, var(--primary-color) 12%, transparent); color: var(--primary-text-color); font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
-      .player { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px; align-items: start; margin: 12px 0 16px; min-width: 0; max-width: 100%; }
+      .player { display: grid; gap: 12px; margin: 12px 0 16px; padding: 12px; min-width: 0; max-width: 100%; border: 1px solid color-mix(in srgb, var(--divider-color) 68%, transparent); border-radius: 18px; background: color-mix(in srgb, var(--secondary-background-color) 34%, transparent); }
       .player > div { min-width: 0; max-width: 100%; overflow: hidden; }
-      .ep-title { font-size: 1.05rem; font-weight: 650; margin: 4px 0; overflow-wrap: anywhere; }
+      .player-hero { display: grid; grid-template-columns: clamp(108px, 36%, 158px) minmax(0, 1fr); gap: 14px; align-items: start; min-width: 0; }
+      .player .art { width: 100%; max-width: 158px; border-radius: 16px; box-shadow: 0 8px 22px rgba(0,0,0,.18); }
+      .player-summary { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .ep-title { font-size: 1.08rem; font-weight: 700; line-height: 1.28; margin: 2px 0; overflow-wrap: anywhere; }
+      .player-summary .ep-title { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
       .feed-title, .meta, .desc { color: var(--secondary-text-color); font-size: .9rem; min-width: 0; max-width: 100%; }
+      .feed-title { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      .output-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .desc { margin-top: 8px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+      .player-summary .desc { margin-top: 2px; -webkit-line-clamp: 2; }
+      .player-control-panel { display: grid; gap: 10px; min-width: 0; }
       .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; min-width: 0; max-width: 100%; }
+      .meta-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin-top: 0; }
       .controls select { max-width: 100%; }
       .speed-control { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; color: var(--secondary-text-color); font-size: .85rem; white-space: nowrap; }
       .speed-control select { min-width: 78px; padding: 10px 30px 10px 10px; }
       .output-control { display: flex; align-items: center; gap: 8px; flex: 1 1 210px; min-width: 180px; max-width: 100%; color: var(--secondary-text-color); font-size: .85rem; }
       .output-control select { flex: 1 1 auto; min-width: 0; }
+      .meta-controls .output-control { flex: 1 1 auto; min-width: 0; }
+      .transport-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+      .transport-controls button { flex: 0 0 auto; }
+      .transport-controls .primary-action { min-width: 78px; }
+      .transport-controls .mark-action { margin-left: auto; }
       .progress-wrap { margin-top: 12px; min-width: 0; max-width: 100%; }
-      .bar { height: 8px; background: var(--secondary-background-color); border-radius: 99px; overflow: hidden; cursor: pointer; }
+      .player-control-panel .progress-wrap { margin-top: 0; }
+      .bar { height: 8px; background: color-mix(in srgb, var(--secondary-background-color) 86%, var(--primary-text-color) 14%); border-radius: 99px; overflow: hidden; cursor: pointer; }
       .bar > div { height: 100%; width: 0%; background: var(--primary-color); transition: width .18s linear; }
       .time { display: flex; justify-content: space-between; color: var(--secondary-text-color); font-size: .8rem; margin-top: 4px; }
       .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 8px; min-width: 0; max-width: 100%; overflow: hidden; }
@@ -1713,7 +1728,11 @@ class PodcastPlayerCard extends HTMLElement {
       .latest-main:hover { background: var(--secondary-background-color); }
       .latest-main .art { width: 64px; border-radius: 12px; }
       @media (max-width: 620px) {
-        .player { grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
+        .player { padding: 10px; gap: 11px; }
+        .player-hero { grid-template-columns: minmax(96px, 112px) minmax(0, 1fr); gap: 12px; }
+        .player .art { width: 100%; border-radius: 14px; }
+        .meta-controls { grid-template-columns: 1fr; }
+        .transport-controls .mark-action { margin-left: 0; }
         .art { width: 88px; border-radius: 10px; }
         .filters { display: flex; flex-wrap: wrap; }
         .add { grid-template-columns: 1fr; }
@@ -1923,21 +1942,29 @@ class PodcastPlayerCard extends HTMLElement {
     const playLabel = this._playPauseLabelForSelected(playing);
     const outputLabel = this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : (externalSelected ? `Ready for ${selectedExternalName}` : "Browser playback");
     const actionPending = this._hasBlockingAction();
+    const playbackStatus = this._playbackStatusText(playing);
     return `
       <div class="player">
-        ${this._renderArt(ep, "art")}
-        <div>
-          <div class="feed-title"><span class="feed-pill">${e(this._feedTitleFor(ep))}</span> <span class="output-label">${e(outputLabel)}</span></div>
-          <div class="ep-title">${e(ep.title || "Untitled episode")}</div>
-          <div class="meta"><span id="player-date">${e(this._formatDate(ep.published))}</span> · <span id="time-duration-meta">${e(this._formatTime(duration || ep.duration_seconds))}</span> · <span id="player-status">${e(ep.played ? "Played" : "Unplayed")}</span>${this._useProxyForCurrent ? " · Proxy" : ""}</div>
-          ${ep.description ? `<div class="desc">${e(this._stripHtml(ep.description))}</div>` : ""}
-          <div class="controls">
+        <div class="player-hero">
+          ${this._renderArt(ep, "art player-art")}
+          <div class="player-summary">
+            <div class="feed-title"><span class="feed-pill">${e(this._feedTitleFor(ep))}</span><span class="output-label">${e(outputLabel)}</span></div>
+            <div class="ep-title">${e(ep.title || "Untitled episode")}</div>
+            <div class="meta"><span id="player-date">${e(this._formatDate(ep.published))}</span> · <span id="time-duration-meta">${e(this._formatTime(duration || ep.duration_seconds))}</span> · <span id="player-status">${e(ep.played ? "Played" : "Unplayed")}</span> · <span id="player-playback-state">${e(playbackStatus)}</span>${this._useProxyForCurrent ? " · Proxy" : ""}</div>
+            ${ep.description ? `<div class="desc">${e(this._stripHtml(ep.description))}</div>` : ""}
+          </div>
+        </div>
+
+        <div class="player-control-panel">
+          <div class="controls meta-controls">
             ${this._renderOutputSelect()}
             ${canSpeed ? `<label class="speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${actionPending ? "disabled" : ""}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
-            <button class="icon" id="playpause" ${actionPending ? "disabled" : ""}>${e(playLabel)}</button>
+          </div>
+          <div class="transport-controls">
+            <button class="icon primary-action" id="playpause" ${actionPending ? "disabled" : ""}>${e(playLabel)}</button>
             ${canSeek ? `<button class="secondary icon" id="back" ${actionPending ? "disabled" : ""}>-15s</button><button class="secondary icon" id="forward" ${actionPending ? "disabled" : ""}>+30s</button>` : ""}
             ${this._isSpeakerOutput() || externalSelected ? `<button class="secondary" id="stop" ${actionPending ? "disabled" : ""}>Stop</button>` : ""}
-            <button class="secondary" id="mark-played" ${actionPending ? "disabled" : ""}>${ep.played ? "Mark unplayed" : "Mark played"}</button>
+            <button class="secondary mark-action" id="mark-played" ${actionPending ? "disabled" : ""}>${ep.played ? "Mark unplayed" : "Mark played"}</button>
           </div>
           ${this._pendingMarkup()}
           ${showProgress ? `<div class="progress-wrap"><div class="bar" id="progress-bar"><div></div></div><div class="time"><span id="time-current">${e(this._formatTime(position))}</span><span id="time-duration">${e(this._formatTime(duration))}</span></div></div>` : ""}
@@ -2005,6 +2032,8 @@ class PodcastPlayerCard extends HTMLElement {
     }
     const selectedStatus = this.shadowRoot.querySelector(`[data-status-id="${CSS.escape(this._currentEpisode.episode_id)}"]`);
     if (selectedStatus) selectedStatus.textContent = this._statusFor(this._currentEpisode);
+    const playerPlaybackState = this.shadowRoot.querySelector("#player-playback-state");
+    if (playerPlaybackState) playerPlaybackState.textContent = this._playbackStatusText(playing);
     const selectedTarget = this._selectedSpeakerTarget();
     const externalSelected = Boolean(selectedTarget);
     const playpause = this.shadowRoot.querySelector("#playpause");
