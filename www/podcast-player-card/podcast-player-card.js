@@ -16,6 +16,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._loading = false;
     this._pendingAction = null;
     this._pendingLabel = null;
+    this._browserLoadState = "idle";
     this._error = null;
     this._info = null;
     this._shared = PodcastPlayerCard._sharedPlayer();
@@ -37,12 +38,18 @@ class PodcastPlayerCard extends HTMLElement {
     this._boundSharedOutputHandler = (ev) => this._onSharedOutputChanged(ev);
     this._boundStorageHandler = (ev) => this._onStorageChanged(ev);
     this._boundAudioHandlers = {
+      loadstart: () => this._onAudioLoading("loading"),
+      waiting: () => this._onAudioLoading("buffering"),
+      stalled: () => this._onAudioLoading("buffering"),
+      canplay: () => this._onAudioReady(),
+      canplaythrough: () => this._onAudioReady(),
+      playing: () => this._onAudioReady(),
       timeupdate: () => this._onTimeUpdate(),
       loadedmetadata: () => this._onLoadedMetadata(),
       ended: () => this._onEnded(),
       error: () => this._onAudioError(),
       play: () => this._saveProgress(true),
-      pause: () => this._saveProgress(false),
+      pause: () => this._onAudioPause(),
     };
   }
 
@@ -587,7 +594,7 @@ class PodcastPlayerCard extends HTMLElement {
     return `
       <div class="output-control">
         <span>Output</span>
-        <select id="output-select" title="Podcast output" ${this._hasPendingAction() ? "disabled" : ""}>
+        <select id="output-select" title="Podcast output" ${this._hasBlockingAction() ? "disabled" : ""}>
           <option value="browser" ${active === "browser" ? "selected" : ""}>Browser</option>
           ${targets.map((target) => `<option value="${e(target.entity_id)}" ${active === target.entity_id ? "selected" : ""}>${e(target.name)}</option>`).join("")}
         </select>
@@ -678,6 +685,7 @@ class PodcastPlayerCard extends HTMLElement {
   _playPauseLabelForSelected(playing) {
     if (this._pendingActionStartsWith("play") || this._pendingAction === "resume") return "Starting…";
     if (this._pendingAction === "pause") return "Pausing…";
+    if (this._isBrowserAudioLoading()) return this._browserLoadState === "buffering" ? "Buffering…" : "Loading…";
     const target = this._selectedSpeakerTarget();
     if (this._isSpeakerOutput() && !this._targetCanPause(target)) return "Restart";
     return playing ? "Pause" : "Play";
@@ -755,6 +763,49 @@ class PodcastPlayerCard extends HTMLElement {
       return this._playerState().state === "playing";
     }
     return !this._audio.paused && !this._audio.ended;
+  }
+
+  _hasBrowserAudioSession() {
+    if (this._isSpeakerOutput() || !this._currentEpisode || !this._audio || !this._audio.src) return false;
+    return !this._shared.currentEpisodeId || this._shared.currentEpisodeId === this._currentEpisode.episode_id;
+  }
+
+  _isBrowserAudioLoading() {
+    if (!this._hasBrowserAudioSession() || this._audio.paused || this._audio.ended) return false;
+    if (this._browserLoadState !== "idle") return true;
+    return this._audio.networkState === 2 && this._audio.readyState < 3;
+  }
+
+  _browserAudioStatusText() {
+    if (!this._isBrowserAudioLoading()) return "";
+    return this._browserLoadState === "buffering" || this._audio.readyState > 1 ? "Buffering audio…" : "Loading audio…";
+  }
+
+  _playbackStatusText(playing = this._isActuallyPlaying()) {
+    if (this._isBrowserAudioLoading()) return this._browserLoadState === "buffering" ? "buffering" : "loading";
+    return playing ? "playing" : "paused";
+  }
+
+  _setBrowserLoadState(state) {
+    const normalized = state || "idle";
+    if (this._browserLoadState === normalized) return;
+    this._browserLoadState = normalized;
+    this._lastRenderKey = "";
+    this._render();
+  }
+
+  _onAudioLoading(state) {
+    if (this._hasBrowserAudioSession()) this._setBrowserLoadState(state);
+  }
+
+  _onAudioReady() {
+    this._setBrowserLoadState("idle");
+    this._updateDynamicUi();
+  }
+
+  _onAudioPause() {
+    this._setBrowserLoadState("idle");
+    this._saveProgress(false);
   }
 
   _syncOutputState() {
@@ -851,7 +902,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _selectEpisode(id, autoplay = false) {
-    if (this._hasPendingAction()) {
+    if (this._hasBlockingAction()) {
       this._notifyPendingAction();
       return;
     }
@@ -915,6 +966,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._selectedEpisodeId = ep.episode_id;
     this._syncToShared();
     this._error = null;
+    this._browserLoadState = "idle";
 
     if (this._isSpeakerOutput() || this._preferredSpeakerTarget()) {
       await this._playSelectedOnSpeaker(ep);
@@ -993,6 +1045,7 @@ class PodcastPlayerCard extends HTMLElement {
       await this._saveProgress(false);
     }
     const player = this._playerState();
+    this._setBrowserLoadState("idle");
     try {
       await this._hass.callService("podcast_player", "play_on_media_player", {
         media_player_entity_id: target,
@@ -1017,7 +1070,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _togglePlay() {
-    if (this._hasPendingAction()) {
+    if (this._hasBlockingAction()) {
       this._notifyPendingAction();
       return;
     }
@@ -1118,6 +1171,7 @@ class PodcastPlayerCard extends HTMLElement {
     }
     this._audio.pause();
     this._audio.currentTime = 0;
+    this._setBrowserLoadState("idle");
     this._syncToShared();
     await this._saveProgress(false);
     await this._hass.callService("podcast_player", "stop", {});
@@ -1180,6 +1234,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _onTimeUpdate() {
+    this._setBrowserLoadState("idle");
     if (this._currentEpisode) {
       this._currentEpisode.position = this._audio.currentTime || 0;
       if (Number.isFinite(this._audio.duration)) this._currentEpisode.duration_seconds = this._audio.duration;
@@ -1204,6 +1259,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _onEnded() {
+    this._setBrowserLoadState("idle");
     if (this._currentEpisode) {
       this._currentEpisode.position = this._audio.duration || this._currentEpisode.duration_seconds || 0;
       await this._saveProgress(false);
@@ -1212,6 +1268,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _onAudioError() {
+    this._setBrowserLoadState("idle");
     if (!this._currentEpisode || this._audio.paused) return;
     if (!this._useProxyForCurrent) {
       this._info = "Direct playback failed. Trying Home Assistant proxy…";
@@ -1291,7 +1348,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _changeOutputTarget(value) {
-    if (this._hasPendingAction()) {
+    if (this._hasBlockingAction()) {
       this._notifyPendingAction();
       return;
     }
@@ -1387,7 +1444,16 @@ class PodcastPlayerCard extends HTMLElement {
     return Boolean(this._pendingAction);
   }
 
+  _hasBusyIndicator() {
+    return this._hasPendingAction() || this._isBrowserAudioLoading();
+  }
+
+  _hasBlockingAction() {
+    return this._hasBusyIndicator();
+  }
+
   _pendingStatusText() {
+    if (this._isBrowserAudioLoading()) return this._browserAudioStatusText();
     return this._pendingLabel ? `${this._pendingLabel}…` : "";
   }
 
@@ -1396,13 +1462,14 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _notifyPendingAction() {
-    if (this._pendingLabel) this._info = `${this._pendingLabel}…`;
+    const status = this._pendingStatusText();
+    if (status) this._info = status;
     this._lastRenderKey = "";
     this._render();
   }
 
   _pendingMarkup() {
-    if (!this._hasPendingAction()) return "";
+    if (!this._hasBusyIndicator()) return "";
     return `<div class="pending-inline" role="status" aria-live="polite"><span class="spinner"></span><span>${this._escape(this._pendingStatusText())}</span></div>`;
   }
 
@@ -1490,6 +1557,8 @@ class PodcastPlayerCard extends HTMLElement {
       loading: this._loading,
       pendingAction: this._pendingAction,
       pendingLabel: this._pendingLabel,
+      browserLoadState: this._browserLoadState,
+      browserAudioLoading: this._isBrowserAudioLoading(),
       error: this._error,
       info: this._info,
       selectedFeed: this._selectedFeed,
@@ -1665,7 +1734,7 @@ class PodcastPlayerCard extends HTMLElement {
     const episodes = lib ? lib.episodes || [] : [];
     const title = this._config.title || "Podcasts";
     const listHeight = this._config.max_height || "560px";
-    const actionPending = this._hasPendingAction();
+    const actionPending = this._hasBlockingAction();
 
     this.shadowRoot.innerHTML = `
       <style>${this._baseStyles(`.episodes { --podcast-list-height: ${listHeight}; }`)}</style>
@@ -1730,7 +1799,8 @@ class PodcastPlayerCard extends HTMLElement {
     const speed = this._currentBrowserSpeed(ep);
     const playLabel = this._playPauseLabelForSelected(playing);
     const output = this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : (externalSelected ? `Ready for ${selectedExternalName}` : "Browser");
-    const actionPending = this._hasPendingAction();
+    const actionPending = this._hasBlockingAction();
+    const playbackStatus = this._playbackStatusText(playing);
     this.shadowRoot.innerHTML = `
       <style>${this._baseStyles()}</style>
       <ha-card>
@@ -1746,7 +1816,7 @@ class PodcastPlayerCard extends HTMLElement {
             <div class="art">${ep && this._artFor(ep) ? `<img src="${e(this._artFor(ep))}" alt="" />` : `<div class="fallback">🎙️</div>`}</div>
             <div>
               <div class="ep-title">${ep ? e(ep.title || "Untitled episode") : "No episode selected"}</div>
-              <div class="compact-status">${showProgress ? `<span>${e(this._formatTime(position))}</span><span>·</span><span>${e(this._formatTime(duration))}</span><span>·</span><span>${playing ? "playing" : "paused"}</span><span>·</span><span>${e(output)}</span>` : `<span>${e(output)}</span>`}</div>
+              <div class="compact-status">${showProgress ? `<span>${e(this._formatTime(position))}</span><span>·</span><span>${e(this._formatTime(duration))}</span><span>·</span><span>${e(playbackStatus)}</span><span>·</span><span>${e(output)}</span>` : `<span>${e(output)}</span>`}</div>
               ${showProgress ? `<div class="progress-wrap"><div class="bar" id="progress-bar"><div></div></div></div>` : ""}
               <div class="compact-controls">
                 ${this._renderOutputSelect()}
@@ -1790,8 +1860,8 @@ class PodcastPlayerCard extends HTMLElement {
     const countLabel = this._selectedFeed === "all"
       ? `${latestEpisodes.length} latest ${latestEpisodes.length === 1 ? "episode" : "episodes"}`
       : (latestEpisodes.length ? selectedFeed : "No episodes");
-    const busyClass = this._hasPendingAction() ? " busy" : "";
-    const actionPending = this._hasPendingAction();
+    const busyClass = this._hasBlockingAction() ? " busy" : "";
+    const actionPending = this._hasBlockingAction();
     this.shadowRoot.innerHTML = `
       <style>${this._baseStyles(`.feed-strip { margin-top: 4px; margin-bottom: 10px; } .latest-list { display: grid; gap: 8px; min-width: 0; } .latest-main { padding: 10px 8px; border: 1px solid color-mix(in srgb, var(--divider-color) 70%, transparent); background: color-mix(in srgb, var(--secondary-background-color) 28%, transparent); } .latest-main .row-title { font-size: .92rem; }`)}</style>
       <ha-card>
@@ -1810,7 +1880,7 @@ class PodcastPlayerCard extends HTMLElement {
           ${latestEpisodes.length ? `
             <div class="latest-list">
               ${latestEpisodes.map((latest) => `
-                <div class="latest-main episode${busyClass}" data-episode-id="${e(latest.episode_id)}" role="button" tabindex="0" aria-disabled="${this._hasPendingAction() ? "true" : "false"}" title="Play episode">
+                <div class="latest-main episode${busyClass}" data-episode-id="${e(latest.episode_id)}" role="button" tabindex="0" aria-disabled="${this._hasBlockingAction() ? "true" : "false"}" title="Play episode">
                   <div class="art">${this._artFor(latest) ? `<img src="${e(this._artFor(latest))}" alt="" />` : `<div class="fallback">🎙️</div>`}</div>
                   <div>
                     <div class="row-title">${e(latest.title || "Untitled episode")}</div>
@@ -1852,7 +1922,7 @@ class PodcastPlayerCard extends HTMLElement {
     const playing = this._isActuallyPlaying();
     const playLabel = this._playPauseLabelForSelected(playing);
     const outputLabel = this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : (externalSelected ? `Ready for ${selectedExternalName}` : "Browser playback");
-    const actionPending = this._hasPendingAction();
+    const actionPending = this._hasBlockingAction();
     return `
       <div class="player">
         ${this._renderArt(ep, "art")}
@@ -1880,7 +1950,7 @@ class PodcastPlayerCard extends HTMLElement {
     const e = (v) => this._escape(v);
     if (!feeds.length) return "";
     const allSelected = this._selectedFeed === "all";
-    const disabled = this._hasPendingAction() ? " disabled" : "";
+    const disabled = this._hasBlockingAction() ? " disabled" : "";
     const allChip = `<button class="feed-chip ${allSelected ? "selected" : ""}" data-feed-chip="all"${disabled}><div class="avatar"><div class="fallback">∞</div></div><div class="feed-chip-title">All feeds</div></button>`;
     const chips = feeds.map((feed) => {
       const art = feed.artwork_url ? `<img src="${e(feed.artwork_url)}" alt="" />` : `<div class="fallback">🎙️</div>`;
@@ -1896,11 +1966,11 @@ class PodcastPlayerCard extends HTMLElement {
     const dur = Number(item.duration_seconds || 0);
     const pct = dur > 0 ? Math.min(100, (pos / dur) * 100) : 0;
     const selected = item.episode_id === this._selectedEpisodeId ? " selected" : "";
-    const busy = this._hasPendingAction() ? " busy" : "";
+    const busy = this._hasBlockingAction() ? " busy" : "";
     const feedTitle = this._feedTitleFor(item);
     const status = this._statusFor(item);
     return `
-      <div class="episode${selected}${busy}" data-episode-id="${e(item.episode_id)}" role="button" tabindex="0" aria-disabled="${this._hasPendingAction() ? "true" : "false"}" title="Play episode">
+      <div class="episode${selected}${busy}" data-episode-id="${e(item.episode_id)}" role="button" tabindex="0" aria-disabled="${this._hasBlockingAction() ? "true" : "false"}" title="Play episode">
         ${this._renderArt(item, "avatar")}
         <div>
           <div class="row-title">${e(item.title || "Untitled episode")}</div>
@@ -1943,7 +2013,7 @@ class PodcastPlayerCard extends HTMLElement {
     if (compactStatus) {
       const output = this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : (externalSelected ? `Ready for ${this._limitedExternalName()}` : "Browser");
       if (this._targetCanShowProgress(selectedTarget)) {
-        compactStatus.innerHTML = `<span>${this._formatTime(position)}</span><span>·</span><span>${this._formatTime(duration)}</span><span>·</span><span>${playing ? "playing" : "paused"}</span><span>·</span><span>${this._escape(output)}</span>`;
+        compactStatus.innerHTML = `<span>${this._formatTime(position)}</span><span>·</span><span>${this._formatTime(duration)}</span><span>·</span><span>${this._escape(this._playbackStatusText(playing))}</span><span>·</span><span>${this._escape(output)}</span>`;
       } else {
         compactStatus.innerHTML = `<span>${this._escape(output)}</span>`;
       }
@@ -1969,7 +2039,7 @@ class PodcastPlayerCard extends HTMLElement {
     root.querySelector("#feed-select")?.addEventListener("change", (ev) => this._changeFeed(ev.target.value));
     root.querySelector("#filter-select")?.addEventListener("change", (ev) => this._changeFilter(ev.target.value));
     root.querySelectorAll("[data-feed-chip]").forEach((chip) => chip.addEventListener("click", () => {
-      if (this._hasPendingAction()) {
+      if (this._hasBlockingAction()) {
         this._notifyPendingAction();
         return;
       }
@@ -1986,7 +2056,7 @@ class PodcastPlayerCard extends HTMLElement {
     root.querySelector("#speed")?.addEventListener("change", (ev) => this._setSpeed(ev.target.value));
     root.querySelector("#mark-played")?.addEventListener("click", () => this._withPendingAction("mark_played", "Updating episode", () => this._markPlayed(!(this._currentEpisode && this._currentEpisode.played)), { timeoutMs: 10000 }));
     root.querySelector("#progress-bar")?.addEventListener("click", async (ev) => {
-      if (this._hasPendingAction()) {
+      if (this._hasBlockingAction()) {
         this._notifyPendingAction();
         return;
       }
@@ -1998,7 +2068,7 @@ class PodcastPlayerCard extends HTMLElement {
     });
     root.querySelectorAll(".episode").forEach((row) => {
       const playRow = () => {
-        if (this._hasPendingAction()) {
+        if (this._hasBlockingAction()) {
           this._notifyPendingAction();
           return;
         }
