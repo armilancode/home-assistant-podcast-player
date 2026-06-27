@@ -1353,6 +1353,7 @@ class PodcastPlayerCard extends HTMLElement {
       return;
     }
     const nextTarget = value || "browser";
+    this._error = null;
 
     if (nextTarget === "browser") {
       if (this._isSpeakerOutput()) {
