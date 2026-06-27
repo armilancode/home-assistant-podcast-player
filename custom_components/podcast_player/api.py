@@ -22,6 +22,7 @@ from .const import (
     USER_AGENT,
 )
 from .coordinator import PodcastRuntime
+from .media_source import media_source_id_for_episode
 from .speaker_proxy import ensure_proxy_secret, verify_proxy_token
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def _public_episode(episode: dict[str, Any], progress: dict[str, Any] | None = N
         "duration_seconds": progress.get("duration") or episode.get("duration_seconds"),
         "audio_url": episode.get("audio_url"),
         "audio_type": episode.get("audio_type"),
+        "media_source_id": media_source_id_for_episode(str(episode_id)) if episode_id else None,
         "artwork_url": episode.get("artwork_url"),
         "website_url": episode.get("website_url"),
         "season": episode.get("season"),
