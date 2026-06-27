@@ -74,16 +74,26 @@ def local_base_url(hass: HomeAssistant) -> str | None:
     return (internal or external or "").rstrip("/") or None
 
 
+def _signed_proxy_query(settings: dict, episode_id: str) -> str:
+    """Return the signed proxy query string for a stored episode."""
+    secret = ensure_proxy_secret(settings)
+    expires = int(time.time()) + SPEAKER_PROXY_TOKEN_TTL_SECONDS
+    token = sign_proxy_token(secret, episode_id, expires)
+    return urlencode({"expires": expires, "token": token})
+
+
+def make_signed_speaker_proxy_path(settings: dict, episode_id: str) -> str:
+    """Build a relative signed proxy path for browser-based playback."""
+    path = HTTP_SPEAKER_PROXY_URL.format(episode_id=episode_id)
+    return f"{path}?{_signed_proxy_query(settings, episode_id)}"
+
+
 def make_signed_speaker_proxy_url(hass: HomeAssistant, settings: dict, episode_id: str) -> str | None:
     """Build an absolute signed proxy URL for a stored episode."""
     base = local_base_url(hass)
     if not base:
         return None
-    secret = ensure_proxy_secret(settings)
-    expires = int(time.time()) + SPEAKER_PROXY_TOKEN_TTL_SECONDS
-    token = sign_proxy_token(secret, episode_id, expires)
-    path = HTTP_SPEAKER_PROXY_URL.format(episode_id=episode_id)
-    return f"{base}{path}?{urlencode({'expires': expires, 'token': token})}"
+    return f"{base}{make_signed_speaker_proxy_path(settings, episode_id)}"
 
 
 def make_signed_speaker_artwork_proxy_url(hass: HomeAssistant, settings: dict, episode_id: str) -> str | None:

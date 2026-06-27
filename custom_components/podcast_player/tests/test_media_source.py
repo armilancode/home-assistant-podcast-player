@@ -2,6 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from homeassistant.components.media_player import MediaClass, MediaType
@@ -14,6 +15,7 @@ from custom_components.podcast_player.media_source import (
     _parts,
     media_source_id_for_episode,
 )
+from custom_components.podcast_player.speaker_proxy import verify_proxy_token
 from custom_components.podcast_player.storage import default_data
 
 
@@ -73,8 +75,8 @@ def _source(runtime: SimpleNamespace) -> PodcastMediaSource:
     return PodcastMediaSource(hass)
 
 
-def _item(identifier: str | None) -> SimpleNamespace:
-    return SimpleNamespace(identifier=identifier)
+def _item(identifier: str | None, target_media_player: str | None = None) -> SimpleNamespace:
+    return SimpleNamespace(identifier=identifier, target_media_player=target_media_player)
 
 
 def _add_feed(storage: FakeStorage, feed_id: str, title: str, *, enabled: bool = True) -> None:
@@ -216,8 +218,30 @@ def test_browse_unknown_feed_raises() -> None:
         asyncio.run(_source(runtime).async_browse_media(_item("feed/missing")))
 
 
-def test_resolve_direct_first_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Direct-first resolve does not create a proxy URL when direct audio exists."""
+def test_resolve_browser_playback_uses_relative_proxy() -> None:
+    """Browser Media Browser playback uses a relative signed HA proxy URL."""
+    runtime = _runtime()
+    _add_feed(runtime.storage, "feed_1", "Feed One")
+    _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
+
+    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1")))
+
+    parsed = urlparse(resolved.url)
+    query = parse_qs(parsed.query)
+
+    assert parsed.path == "/api/podcast_player/speaker_proxy/ep_1"
+    assert verify_proxy_token(
+        runtime.storage.data["settings"]["speaker_proxy_secret"],
+        "ep_1",
+        query["expires"][0],
+        query["token"][0],
+    )
+    assert resolved.mime_type == "audio/mpeg"
+    assert runtime.storage.saved
+
+
+def test_resolve_direct_first_speaker_target_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct-first speaker-target resolve does not create a proxy URL when direct audio exists."""
     runtime = _runtime()
     _add_feed(runtime.storage, "feed_1", "Feed One")
     _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
@@ -230,7 +254,7 @@ def test_resolve_direct_first_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_proxy_url", fake_proxy)
 
-    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1")))
+    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.speaker")))
 
     assert resolved.url == "https://cdn.example.test/ep_1.mp3"
     assert resolved.mime_type == "audio/mpeg"
@@ -251,7 +275,7 @@ def test_resolve_prefers_proxy_when_configured(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_proxy_url", fake_proxy)
 
-    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1")))
+    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.speaker")))
 
     assert resolved.url == "https://ha.example.test/proxy"
     assert runtime.storage.saved
@@ -265,7 +289,7 @@ def test_resolve_proxy_mode_falls_back_to_direct(monkeypatch: pytest.MonkeyPatch
     _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
     monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_proxy_url", lambda *args: None)
 
-    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1")))
+    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.speaker")))
 
     assert resolved.url == "https://cdn.example.test/ep_1.mp3"
     assert not runtime.storage.saved

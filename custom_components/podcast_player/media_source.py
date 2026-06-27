@@ -17,7 +17,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, NAME
 from .coordinator import PodcastRuntime
-from .speaker_proxy import make_signed_speaker_proxy_url
+from .speaker_proxy import make_signed_speaker_proxy_path, make_signed_speaker_proxy_url
 
 FEEDS_IDENTIFIER = "feeds"
 LATEST_LIMIT = 25
@@ -71,14 +71,17 @@ class PodcastMediaSource(MediaSource):
             raise Unresolvable("Podcast episode has no playable audio URL")
 
         settings = runtime.storage.data["settings"]
+        secret_before = settings.get("speaker_proxy_secret")
         url = direct_url
-        if not settings.get("direct_first", True):
-            secret_before = settings.get("speaker_proxy_secret")
+        if item.target_media_player is None:
+            url = make_signed_speaker_proxy_path(settings, episode_id)
+        elif not settings.get("direct_first", True):
             proxy_url = make_signed_speaker_proxy_url(self.hass, settings, episode_id)
             if proxy_url:
                 url = proxy_url
-                if not secret_before and settings.get("speaker_proxy_secret"):
-                    await runtime.storage.async_save()
+
+        if not secret_before and settings.get("speaker_proxy_secret"):
+            await runtime.storage.async_save()
 
         return PlayMedia(url=url, mime_type=episode.get("audio_type") or "audio/mpeg")
 

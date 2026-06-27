@@ -29,6 +29,14 @@ _LOGGER = logging.getLogger(__name__)
 
 REGISTERED_WS_KEY = f"{DOMAIN}_ws_registered"
 REGISTERED_HTTP_KEY = f"{DOMAIN}_http_registered"
+AUDIO_PROXY_RESPONSE_HEADERS = (
+    "Content-Type",
+    "Content-Length",
+    "Content-Range",
+    "Accept-Ranges",
+    "ETag",
+    "Last-Modified",
+)
 
 
 def get_runtime(hass: HomeAssistant) -> PodcastRuntime | None:
@@ -98,6 +106,28 @@ def _feature_enabled(features: int, flag: Any) -> bool:
         return bool(int(features or 0) & int(flag))
     except Exception:  # noqa: BLE001
         return False
+
+
+def _audio_proxy_response_headers(upstream_headers: Any, fallback_content_type: str) -> dict[str, str]:
+    """Return safe audio response headers copied from an upstream response."""
+    response_headers = {}
+    for key in AUDIO_PROXY_RESPONSE_HEADERS:
+        if value := upstream_headers.get(key):
+            response_headers[key] = value
+    response_headers.setdefault("Content-Type", fallback_content_type)
+    response_headers.setdefault("Accept-Ranges", "bytes")
+    return response_headers
+
+
+def _generic_audio_probe_response(fallback_content_type: str) -> web.Response:
+    """Return a conservative successful HEAD response for probe-only clients."""
+    return web.Response(
+        status=200,
+        headers={
+            "Content-Type": fallback_content_type,
+            "Accept-Ranges": "bytes",
+        },
+    )
 
 
 def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
@@ -347,18 +377,38 @@ async def _proxy_episode_audio(request: web.Request, episode_id: str, *, require
     if not audio_url:
         return web.Response(status=404, text="Episode has no audio URL")
 
-    # Some target speakers probe URLs with HEAD first. Provide enough headers
-    # without forcing a remote audio download.
-    if request.method == "HEAD":
-        return web.Response(
-            status=200,
-            headers={
-                "Content-Type": episode.get("audio_type") or "audio/mpeg",
-                "Accept-Ranges": "bytes",
-            },
-        )
-
+    fallback_content_type = episode.get("audio_type") or "audio/mpeg"
     session = async_get_clientsession(hass)
+
+    # Some clients probe URLs with HEAD first. Follow the upstream redirect chain
+    # and return real media headers when possible so duration/seek detection has
+    # Content-Length and Accept-Ranges. If an upstream rejects HEAD, keep the
+    # previous safe behavior and return a conservative probe response.
+    if request.method == "HEAD":
+        try:
+            upstream = await session.head(
+                audio_url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=aiohttp.ClientTimeout(total=20, sock_connect=15, sock_read=15),
+                allow_redirects=True,
+            )
+        except (aiohttp.ClientError, TimeoutError) as err:
+            _LOGGER.debug("Podcast audio proxy HEAD probe failed for episode %s: %s", episode_id, err)
+            return _generic_audio_probe_response(fallback_content_type)
+
+        async with upstream:
+            if upstream.status >= 400:
+                _LOGGER.debug(
+                    "Podcast audio proxy HEAD probe returned HTTP %s for episode %s",
+                    upstream.status,
+                    episode_id,
+                )
+                return _generic_audio_probe_response(fallback_content_type)
+            return web.Response(
+                status=upstream.status,
+                headers=_audio_proxy_response_headers(upstream.headers, fallback_content_type),
+            )
+
     headers = {"User-Agent": USER_AGENT}
     if range_header := request.headers.get("Range"):
         headers["Range"] = range_header
@@ -379,11 +429,7 @@ async def _proxy_episode_audio(request: web.Request, episode_id: str, *, require
             return web.Response(status=upstream.status, text=f"Upstream returned HTTP {upstream.status}")
 
         response_headers = {}
-        for key in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
-            if value := upstream.headers.get(key):
-                response_headers[key] = value
-        response_headers.setdefault("Content-Type", episode.get("audio_type") or "audio/mpeg")
-        response_headers.setdefault("Accept-Ranges", "bytes")
+        response_headers.update(_audio_proxy_response_headers(upstream.headers, fallback_content_type))
 
         response = web.StreamResponse(status=upstream.status, headers=response_headers)
         await response.prepare(request)
