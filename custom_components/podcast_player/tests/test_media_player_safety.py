@@ -86,11 +86,11 @@ def _coordinator(state: object | None) -> PodcastUpdateCoordinator:
 
 def test_playback_target_off_fails_before_service_call() -> None:
     """An off target must fail before Podcast Player calls play_media."""
-    state = SimpleNamespace(state="off", attributes={}, name="Bedroom TV")
+    state = SimpleNamespace(state="off", attributes={}, name="Kitchen Speaker")
     coord = _coordinator(state)
 
     with pytest.raises(HomeAssistantError):
-        coord._validate_media_player_output_target("media_player.bedroom_tv")
+        coord._validate_media_player_output_target("media_player.kitchen_speaker")
 
     assert not coord.hass.services.called
 
@@ -125,13 +125,13 @@ def test_playback_target_without_play_media_feature_fails_before_service_call() 
 
 def test_stop_unavailable_active_target_clears_without_service_call() -> None:
     """Stopping an unavailable active target clears local state without direct internals."""
-    state = SimpleNamespace(state="unavailable", attributes={}, name="Bedroom TV")
+    state = SimpleNamespace(state="unavailable", attributes={}, name="Kitchen Speaker")
     coord = _coordinator(state)
     coord.storage.data["player"]["state"] = "playing"
     coord.storage.data["player"]["output_mode"] = "speaker"
-    coord.storage.data["player"]["target_media_player"] = "media_player.bedroom_tv"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
 
-    asyncio.run(coord.async_stop_media_player("media_player.bedroom_tv"))
+    asyncio.run(coord.async_stop_media_player("media_player.kitchen_speaker"))
 
     assert coord.storage.data["player"]["state"] == "idle"
     assert coord.storage.data["player"]["output_mode"] == "browser"
@@ -142,7 +142,7 @@ def test_stop_unavailable_active_target_clears_without_service_call() -> None:
 def test_stop_missing_inactive_target_fails_without_service_call() -> None:
     """Stopping a missing last target must not call media_stop."""
     coord = _coordinator(None)
-    coord.storage.data["player"]["last_target_media_player"] = "media_player.old_tv"
+    coord.storage.data["player"]["last_target_media_player"] = "media_player.old_speaker"
 
     with pytest.raises(HomeAssistantError):
         asyncio.run(coord.async_stop_media_player())
@@ -154,11 +154,11 @@ def test_stop_missing_inactive_target_fails_without_service_call() -> None:
 
 def test_pause_off_active_target_clears_without_service_call() -> None:
     """Pausing an off active target clears stale speaker state without media_pause."""
-    state = SimpleNamespace(state="off", attributes={}, name="Bedroom TV")
+    state = SimpleNamespace(state="off", attributes={}, name="Kitchen Speaker")
     coord = _coordinator(state)
     coord.storage.data["player"]["state"] = "playing"
     coord.storage.data["player"]["output_mode"] = "speaker"
-    coord.storage.data["player"]["target_media_player"] = "media_player.bedroom_tv"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
 
     with pytest.raises(HomeAssistantError):
         asyncio.run(coord.async_pause())
@@ -171,12 +171,12 @@ def test_pause_off_active_target_clears_without_service_call() -> None:
 
 def test_resume_off_active_target_clears_without_service_call() -> None:
     """Resuming an off active target clears stale speaker state without media_play."""
-    state = SimpleNamespace(state="off", attributes={}, name="Bedroom TV")
+    state = SimpleNamespace(state="off", attributes={}, name="Kitchen Speaker")
     coord = _coordinator(state)
     coord.storage.data["player"]["state"] = "paused"
     coord.storage.data["player"]["current_episode_id"] = "episode-1"
     coord.storage.data["player"]["output_mode"] = "speaker"
-    coord.storage.data["player"]["target_media_player"] = "media_player.bedroom_tv"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
 
     with pytest.raises(HomeAssistantError):
         asyncio.run(coord.async_resume())
@@ -189,12 +189,12 @@ def test_resume_off_active_target_clears_without_service_call() -> None:
 
 def test_seek_off_active_target_saves_progress_without_service_call() -> None:
     """Seeking while the active target is off saves progress and avoids media_seek."""
-    state = SimpleNamespace(state="off", attributes={}, name="Bedroom TV")
+    state = SimpleNamespace(state="off", attributes={}, name="Kitchen Speaker")
     coord = _coordinator(state)
     coord.storage.data["player"]["state"] = "playing"
     coord.storage.data["player"]["current_episode_id"] = "episode-1"
     coord.storage.data["player"]["output_mode"] = "speaker"
-    coord.storage.data["player"]["target_media_player"] = "media_player.bedroom_tv"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
 
     asyncio.run(coord.async_seek("episode-1", 42))
 

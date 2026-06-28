@@ -205,8 +205,8 @@ def _raise_media_player_target_help(service_hint: str) -> None:
     raise HomeAssistantError(
         f"{service_hint}: action Target selects the podcast feed sensor. "
         "Put the output media player in data.media_player_entity_id instead. "
-        "Example: target.entity_id = sensor.house_podcast_player_podcast_feed_candace, "
-        "data.media_player_entity_id = media_player.bedroom_tv."
+        "Example: target.entity_id = sensor.example_podcast_feed, "
+        "data.media_player_entity_id = media_player.kitchen_speaker."
     )
 
 

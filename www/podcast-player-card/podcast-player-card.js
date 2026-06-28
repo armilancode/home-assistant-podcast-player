@@ -725,17 +725,34 @@ class PodcastPlayerCard extends HTMLElement {
       .filter((state) => state.entity_id !== currentEntity)
       .filter((state) => !String(state.entity_id).includes("spotify"))
       .filter((state) => !String((state.attributes && state.attributes.friendly_name) || "").toLowerCase().includes("spotify"))
-      .map((state) => ({
-        entity_id: state.entity_id,
-        name: (state.attributes && state.attributes.friendly_name) || state.entity_id.replace(/^media_player\./, ""),
-        capabilities: {
-          live_state: !["unknown", "unavailable"].includes(String(state.state || "unknown")),
-          progress: Boolean(state.attributes && (state.attributes.media_position !== undefined || state.attributes.media_duration !== undefined || state.attributes.media_position_updated_at !== undefined)),
-          seek: "best_effort",
-          stop: "best_effort",
-          artwork: "metadata",
-        },
-      }))
+      .map((state) => {
+        const name = (state.attributes && state.attributes.friendly_name) || state.entity_id.replace(/^media_player\./, "");
+        const stateValue = String(state.state || "unknown");
+        const liveState = !["unknown", "unavailable", "off"].includes(stateValue);
+        const progress = Boolean(liveState && state.attributes && (state.attributes.media_position !== undefined || state.attributes.media_duration !== undefined || state.attributes.media_position_updated_at !== undefined));
+        const status = stateValue === "off" ? "off" : (liveState ? "ready" : "unavailable");
+        const statusLabel = status === "off" ? "Off" : (status === "ready" ? "Ready" : "Unavailable");
+        return {
+          entity_id: state.entity_id,
+          name,
+          state: stateValue,
+          status,
+          status_label: statusLabel,
+          playable: status === "ready",
+          available: status === "ready",
+          reason: status === "ready" ? null : `${name} is ${stateValue}. Choose Browser playback or reconnect this output.`,
+          capabilities: {
+            play_media: status === "ready",
+            live_state: liveState,
+            progress,
+            seek: progress ? "best_effort" : "none",
+            stop: liveState ? "best_effort" : "none",
+            pause: liveState ? "best_effort" : "none",
+            artwork: "metadata",
+            limited_controls: !progress,
+          },
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
@@ -749,6 +766,52 @@ class PodcastPlayerCard extends HTMLElement {
     return (info && info.capabilities) || {};
   }
 
+  _targetStatusLabel(status) {
+    const value = String(status || "ready");
+    if (value === "off") return "Off";
+    if (value === "unavailable") return "Unavailable";
+    if (value === "unsupported") return "Unsupported";
+    return "Ready";
+  }
+
+  _targetStatus(entityId) {
+    if (!entityId || entityId === "browser") {
+      return { status: "ready", label: "Ready", playable: true, reason: null };
+    }
+
+    const info = this._outputTargetInfo(entityId);
+    const state = this._hass && this._hass.states ? this._hass.states[entityId] : null;
+    const stateValue = String((info && info.state) || (state && state.state) || "unknown");
+    const caps = (info && info.capabilities) || {};
+    let status = String((info && info.status) || "");
+    if (!status) {
+      if (stateValue === "off") status = "off";
+      else if (["unknown", "unavailable"].includes(stateValue)) status = "unavailable";
+      else if (caps.play_media === false) status = "unsupported";
+      else status = "ready";
+    }
+    const label = String((info && info.status_label) || this._targetStatusLabel(status));
+    const playable = info && info.playable !== undefined ? Boolean(info.playable) : status === "ready";
+    const name = this._outputNameFor(entityId);
+    const reason = (info && info.reason) || (playable ? null : `${name} is ${label.toLowerCase()}. Choose Browser playback or reconnect this output.`);
+    return { status, label, playable, reason, state: stateValue };
+  }
+
+  _targetCanPlay(entityId) {
+    return this._targetStatus(entityId).playable;
+  }
+
+  _selectedTargetStatus() {
+    return this._targetStatus(this._selectedSpeakerTarget());
+  }
+
+  _selectedTargetBlockReason() {
+    const target = this._selectedSpeakerTarget();
+    if (!target) return null;
+    const status = this._targetStatus(target);
+    return status.playable ? null : status.reason;
+  }
+
   _targetLimitedByCapabilities(entityId) {
     const info = this._outputTargetInfo(entityId);
     if (info && info.capabilities && info.capabilities.limited_controls !== undefined) return Boolean(info.capabilities.limited_controls);
@@ -757,6 +820,8 @@ class PodcastPlayerCard extends HTMLElement {
 
   _targetCapabilitySummary(entityId) {
     if (!entityId || entityId === "browser") return "Browser has full controls.";
+    const status = this._targetStatus(entityId);
+    if (!status.playable) return status.reason;
     const name = this._outputNameFor(entityId);
     const missing = [];
     if (!this._targetSupportsProgress(entityId)) missing.push("progress");
@@ -769,7 +834,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   _targetHasCapabilityNote(entityId) {
     if (!entityId || entityId === "browser") return false;
-    return !this._targetSupportsProgress(entityId) || !this._targetCanSeek(entityId) || !this._targetCanPause(entityId) || !this._targetCanSpeed(entityId);
+    return !this._targetCanPlay(entityId) || !this._targetSupportsProgress(entityId) || !this._targetCanSeek(entityId) || !this._targetCanPause(entityId) || !this._targetCanSpeed(entityId);
   }
 
   _activeOutputValue() {
@@ -793,15 +858,23 @@ class PodcastPlayerCard extends HTMLElement {
     const targets = this._availableOutputTargets();
     if (!targets.length) return "";
     const active = this._activeOutputValue();
+    const activeStatus = this._targetStatus(active);
     const note = active !== "browser" && this._targetHasCapabilityNote(active) ? this._targetCapabilitySummary(active) : "";
     return `
-      <div class="output-control">
-        <span>Output</span>
-        <select id="output-select" title="Podcast output" ${this._hasBlockingAction() ? "disabled" : ""}>
-          <option value="browser" ${active === "browser" ? "selected" : ""}>Browser</option>
-          ${targets.map((target) => `<option value="${e(target.entity_id)}" ${active === target.entity_id ? "selected" : ""}>${e(target.name)}</option>`).join("")}
-        </select>
-        ${note ? `<span class="cap-info" tabindex="0" aria-label="${e(note)}" title="${e(note)}">!</span>` : ""}
+      <div class="output-field">
+        <div class="output-control">
+          <span>Output</span>
+          <select id="output-select" title="Podcast output" ${this._hasBlockingAction() ? "disabled" : ""}>
+            <option value="browser" ${active === "browser" ? "selected" : ""}>Browser</option>
+            ${targets.map((target) => {
+              const status = this._targetStatus(target.entity_id);
+              const label = status.playable ? target.name : `${target.name} — ${status.label}`;
+              return `<option value="${e(target.entity_id)}" ${active === target.entity_id ? "selected" : ""}>${e(label)}</option>`;
+            }).join("")}
+          </select>
+          ${note ? `<span class="cap-info" tabindex="0" aria-label="${e(note)}" title="${e(note)}">!</span>` : ""}
+        </div>
+        ${active !== "browser" && !activeStatus.playable ? `<div class="target-status-note warn">${e(activeStatus.reason)}</div>` : ""}
       </div>
     `;
   }
@@ -812,7 +885,7 @@ class PodcastPlayerCard extends HTMLElement {
     const selectedTarget = this._selectedSpeakerTarget();
     const speakerState = this._selectedSpeakerState();
     const speakerStateName = speakerState && speakerState.state ? String(speakerState.state) : "";
-    const unavailableTargetStates = new Set(["off", "unavailable", "unknown"]);
+    const targetStatus = this._targetStatus(selectedTarget);
     const prettyState = (state) => {
       const value = String(state || "");
       return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
@@ -822,12 +895,12 @@ class PodcastPlayerCard extends HTMLElement {
     let outputState = "Ready";
     if (this._isSpeakerOutput()) {
       output = this._speakerTargetName();
-      outputState = unavailableTargetStates.has(speakerStateName) ? prettyState(speakerStateName) : (speakerStateName || "Active");
+      outputState = targetStatus.playable ? (speakerStateName ? prettyState(speakerStateName) : "Active") : targetStatus.label;
     } else if (selectedTarget) {
       output = this._outputNameFor(selectedTarget);
-      outputState = unavailableTargetStates.has(speakerStateName) ? prettyState(speakerStateName) : (this._targetSupportsLiveState(selectedTarget) ? "Ready" : "Unavailable");
+      outputState = targetStatus.playable ? "Ready" : targetStatus.label;
     }
-    const outputWarn = unavailableTargetStates.has(String(outputState).toLowerCase()) || outputState === "Unavailable";
+    const outputWarn = Boolean(selectedTarget && !targetStatus.playable);
 
     let session = "Ready";
     if (this._isSpeakerOutput()) {
@@ -863,7 +936,7 @@ class PodcastPlayerCard extends HTMLElement {
         label: "Output",
         value: outputState === "Ready" || outputState === "Active" ? output : `${output}: ${outputState}`,
         state: outputWarn ? "warn" : "ok",
-        title: `Current output: ${output}${outputState ? ` (${outputState})` : ""}.`,
+        title: targetStatus.reason || `Current output: ${output}${outputState ? ` (${outputState})` : ""}.`,
       },
       {
         label: "Session",
@@ -904,12 +977,13 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _targetSupportsLiveState(target) {
+    if (target && target !== "browser" && !this._targetStatus(target).playable) return false;
     const caps = this._targetCapabilities(target);
     if (caps.live_state !== undefined) return Boolean(caps.live_state);
     if (!target || !this._hass || !this._hass.states) return false;
     const state = this._hass.states[target];
     if (!state || !state.state) return false;
-    return !["unknown", "unavailable"].includes(String(state.state));
+    return !["unknown", "unavailable", "off"].includes(String(state.state));
   }
 
   _targetSupportsProgress(target) {
@@ -972,6 +1046,7 @@ class PodcastPlayerCard extends HTMLElement {
     if (this._pendingAction === "pause") return "Pausing…";
     if (this._isBrowserAudioLoading()) return this._browserLoadState === "buffering" ? "Buffering…" : "Loading…";
     const target = this._selectedSpeakerTarget();
+    if (target && !this._targetCanPlay(target)) return this._targetStatus(target).label;
     if (this._isSpeakerOutput() && !this._targetCanPause(target)) return "Restart";
     if (this._browserSessionNeedsTakeover()) return this._audio && this._audio.src ? "Resume" : "Take over";
     return playing ? "Pause" : "Play";
@@ -1258,6 +1333,12 @@ class PodcastPlayerCard extends HTMLElement {
     this._browserLoadState = "idle";
 
     if (this._isSpeakerOutput() || this._preferredSpeakerTarget()) {
+      const blockReason = this._selectedTargetBlockReason();
+      if (blockReason) {
+        this._error = blockReason;
+        this._render();
+        return;
+      }
       await this._playSelectedOnSpeaker(ep);
       return;
     }
@@ -1331,6 +1412,12 @@ class PodcastPlayerCard extends HTMLElement {
       this._render();
       return;
     }
+    const targetStatus = this._targetStatus(target);
+    if (!targetStatus.playable) {
+      this._error = targetStatus.reason;
+      this._render();
+      return;
+    }
     // Capture the browser position before pausing/changing output. Without this,
     // switching Browser -> TV can restart the stream from 0:00 even though the
     // episode had a saved progress point. The backend also checks stored
@@ -1372,6 +1459,12 @@ class PodcastPlayerCard extends HTMLElement {
       return;
     }
     if (!this._currentEpisode) return;
+    const blockReason = this._selectedTargetBlockReason();
+    if (blockReason) {
+      this._error = blockReason;
+      this._render();
+      return;
+    }
     if (this._isSpeakerOutput()) {
       const target = this._speakerTargetEntity();
       if (!this._targetCanPause(target)) {
@@ -1674,6 +1767,14 @@ class PodcastPlayerCard extends HTMLElement {
       return;
     }
 
+    const targetStatus = this._targetStatus(nextTarget);
+    if (!targetStatus.playable) {
+      this._info = targetStatus.reason;
+      this._lastRenderKey = "";
+      this._render();
+      return;
+    }
+
     this._setSharedOutputTarget(nextTarget, true, true);
     this._lastSpeakerTarget = nextTarget;
     this._writePreference("last_speaker_target", nextTarget);
@@ -1880,7 +1981,7 @@ class PodcastPlayerCard extends HTMLElement {
       preferredOutputTarget: this._preferredOutputTarget || "browser",
       canSpeed: this._selectedCanSpeed(),
       currentSpeed: this._currentBrowserSpeed(ep),
-      outputTargets: this._availableOutputTargets().map((t) => `${t.entity_id}:${((t.capabilities || {}).limited_controls) ? "limited" : "full"}:${((t.capabilities || {}).seek) || ""}:${((t.capabilities || {}).speed) || ""}`).join(","),
+      outputTargets: this._availableOutputTargets().map((t) => `${t.entity_id}:${t.status || "ready"}:${t.playable === false ? "blocked" : "playable"}:${((t.capabilities || {}).limited_controls) ? "limited" : "full"}:${((t.capabilities || {}).seek) || ""}:${((t.capabilities || {}).speed) || ""}`).join(","),
       speakerLimited: this._isLimitedSpeakerOutput(),
       playerState: this._playerState().state || "",
       feeds: counts.enabled_feeds,
@@ -1997,9 +2098,12 @@ class PodcastPlayerCard extends HTMLElement {
       .controls select { max-width: 100%; }
       .speed-control { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; color: var(--secondary-text-color); font-size: .85rem; white-space: nowrap; }
       .speed-control select { min-width: 78px; padding: 10px 30px 10px 10px; }
-      .output-control { display: flex; align-items: center; gap: 8px; flex: 1 1 210px; min-width: 180px; max-width: 100%; color: var(--secondary-text-color); font-size: .85rem; }
+      .output-field { display: grid; gap: 5px; flex: 1 1 210px; min-width: 180px; max-width: 100%; }
+      .output-control { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; color: var(--secondary-text-color); font-size: .85rem; }
       .output-control select { flex: 1 1 auto; min-width: 0; }
-      .meta-controls .output-control { flex: 1 1 auto; min-width: 0; }
+      .meta-controls .output-field { min-width: 0; }
+      .target-status-note { font-size: .8rem; line-height: 1.25; border-radius: 9px; padding: 7px 9px; overflow-wrap: anywhere; }
+      .target-status-note.warn { color: var(--warning-color, #f6a623); background: color-mix(in srgb, var(--warning-color, #f6a623) 10%, transparent); }
       .transport-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
       .transport-controls button { flex: 0 0 auto; }
       .transport-controls .primary-action { min-width: 78px; }
@@ -2034,7 +2138,7 @@ class PodcastPlayerCard extends HTMLElement {
       .compact-main .art { width: 58px; border-radius: 12px; }
       .compact-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
       .compact-controls button { padding: 8px 10px; }
-      .compact-controls .output-control { flex-basis: 100%; }
+      .compact-controls .output-field { flex-basis: 100%; }
       .compact-controls .compact-speed-control { flex: 0 0 auto; }
       .compact-controls .compact-speed-control select { min-width: 84px; }
       .compact-controls .icon { min-width: 44px; }
@@ -2129,13 +2233,17 @@ class PodcastPlayerCard extends HTMLElement {
     const selectedTarget = this._selectedControlTarget();
     const externalSelected = Boolean(selectedTarget);
     const selectedExternalName = externalSelected ? this._limitedExternalName() : "Browser";
+    const targetStatus = this._targetStatus(selectedTarget);
     const showProgress = this._targetCanShowProgress(selectedTarget);
     const canSeek = this._targetCanSeek(selectedTarget);
     const canSpeed = this._selectedCanSpeed();
     const speed = this._currentBrowserSpeed(ep);
     const playLabel = this._playPauseLabelForSelected(playing);
-    const output = this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : (externalSelected ? `Ready for ${selectedExternalName}` : "Browser");
+    const output = this._isSpeakerOutput()
+      ? `Playing on ${this._speakerTargetName()}`
+      : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : "Browser");
     const actionPending = this._hasBlockingAction();
+    const playDisabled = !ep || actionPending || (externalSelected && !targetStatus.playable);
     const playbackStatus = this._playbackStatusText(playing);
     this.shadowRoot.innerHTML = `
       <style>${this._baseStyles()}</style>
@@ -2159,9 +2267,9 @@ class PodcastPlayerCard extends HTMLElement {
               <div class="compact-controls">
                 ${this._renderOutputSelect()}
                 ${canSpeed ? `<label class="speed-control compact-speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${ep && !actionPending ? "" : "disabled"}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
-                <button class="icon" id="playpause" ${ep && !actionPending ? "" : "disabled"}>${e(playLabel)}</button>
+                <button class="icon" id="playpause" ${playDisabled ? "disabled" : ""}>${e(playLabel)}</button>
                 ${canSeek ? `<button class="secondary icon" id="back" ${ep && !actionPending ? "" : "disabled"}>-15s</button><button class="secondary icon" id="forward" ${ep && !actionPending ? "" : "disabled"}>+30s</button>` : ""}
-                ${this._isSpeakerOutput() || externalSelected ? `<button class="secondary" id="stop" ${ep && !actionPending ? "" : "disabled"}>Stop</button>` : ""}
+                ${this._isSpeakerOutput() || (externalSelected && targetStatus.playable) ? `<button class="secondary" id="stop" ${ep && !actionPending ? "" : "disabled"}>Stop</button>` : ""}
               </div>
               ${this._pendingMarkup()}
             </div>
@@ -2254,13 +2362,17 @@ class PodcastPlayerCard extends HTMLElement {
     const selectedTarget = this._selectedControlTarget();
     const externalSelected = Boolean(selectedTarget);
     const selectedExternalName = externalSelected ? this._limitedExternalName() : "Browser";
+    const targetStatus = this._targetStatus(selectedTarget);
     const showProgress = this._targetCanShowProgress(selectedTarget);
     const canSeek = this._targetCanSeek(selectedTarget);
     const canSpeed = this._selectedCanSpeed();
     const playing = this._isActuallyPlaying();
     const playLabel = this._playPauseLabelForSelected(playing);
-    const outputLabel = this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : (externalSelected ? `Ready for ${selectedExternalName}` : "Browser playback");
+    const outputLabel = this._isSpeakerOutput()
+      ? `Playing on ${this._speakerTargetName()}`
+      : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : "Browser playback");
     const actionPending = this._hasBlockingAction();
+    const playDisabled = actionPending || (externalSelected && !targetStatus.playable);
     const playbackStatus = this._playbackStatusText(playing);
     return `
       <div class="player">
@@ -2281,9 +2393,9 @@ class PodcastPlayerCard extends HTMLElement {
             ${canSpeed ? `<label class="speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${actionPending ? "disabled" : ""}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
           </div>
           <div class="transport-controls">
-            <button class="icon primary-action" id="playpause" ${actionPending ? "disabled" : ""}>${e(playLabel)}</button>
+            <button class="icon primary-action" id="playpause" ${playDisabled ? "disabled" : ""}>${e(playLabel)}</button>
             ${canSeek ? `<button class="secondary icon" id="back" ${actionPending ? "disabled" : ""}>-15s</button><button class="secondary icon" id="forward" ${actionPending ? "disabled" : ""}>+30s</button>` : ""}
-            ${this._isSpeakerOutput() || externalSelected ? `<button class="secondary" id="stop" ${actionPending ? "disabled" : ""}>Stop</button>` : ""}
+            ${this._isSpeakerOutput() || (externalSelected && targetStatus.playable) ? `<button class="secondary" id="stop" ${actionPending ? "disabled" : ""}>Stop</button>` : ""}
             <button class="secondary mark-action" id="mark-played" ${actionPending ? "disabled" : ""}>${ep.played ? "Mark unplayed" : "Mark played"}</button>
           </div>
           ${this._pendingMarkup()}
@@ -2356,11 +2468,14 @@ class PodcastPlayerCard extends HTMLElement {
     if (playerPlaybackState) playerPlaybackState.textContent = this._playbackStatusText(playing);
     const selectedTarget = this._selectedSpeakerTarget();
     const externalSelected = Boolean(selectedTarget);
+    const targetStatus = this._targetStatus(selectedTarget);
     const playpause = this.shadowRoot.querySelector("#playpause");
     if (playpause) playpause.textContent = this._playPauseLabelForSelected(playing);
     const compactStatus = this.shadowRoot.querySelector(".compact-status");
     if (compactStatus) {
-      const output = this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : (externalSelected ? `Ready for ${this._limitedExternalName()}` : "Browser");
+      const output = this._isSpeakerOutput()
+        ? `Playing on ${this._speakerTargetName()}`
+        : (externalSelected ? (targetStatus.playable ? `Ready for ${this._limitedExternalName()}` : `${this._limitedExternalName()}: ${targetStatus.label}`) : "Browser");
       if (this._targetCanShowProgress(selectedTarget)) {
         compactStatus.innerHTML = `<span>${this._formatTime(position)}</span><span>·</span><span>${this._formatTime(duration)}</span><span>·</span><span>${this._escape(this._playbackStatusText(playing))}</span><span>·</span><span>${this._escape(output)}</span>`;
       } else {

@@ -24,6 +24,7 @@ from .const import (
 from .coordinator import PodcastRuntime
 from .media_source import media_source_id_for_episode
 from .speaker_proxy import ensure_proxy_secret, verify_proxy_token
+from .targets import output_target_status
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,14 +101,6 @@ def _public_feed(feed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _feature_enabled(features: int, flag: Any) -> bool:
-    """Return True if a Home Assistant MediaPlayerEntityFeature flag is present."""
-    try:
-        return bool(int(features or 0) & int(flag))
-    except Exception:  # noqa: BLE001
-        return False
-
-
 def _audio_proxy_response_headers(upstream_headers: Any, fallback_content_type: str) -> dict[str, str]:
     """Return safe audio response headers copied from an upstream response."""
     response_headers = {}
@@ -133,18 +126,19 @@ def _generic_audio_probe_response(fallback_content_type: str) -> web.Response:
 def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
     """Return frontend-safe media-player output target capability info.
 
-    This is intentionally generic. It does not hardcode Bedroom TV; it classifies
+    This is intentionally generic. It does not hardcode a specific device; it classifies
     every available HA media_player from registry/state/support flags and adds a
     best-effort capability model for the card and automations.
     """
     try:
-        from homeassistant.components.media_player import MediaPlayerEntityFeature
         from homeassistant.helpers import entity_registry as er
     except Exception:  # noqa: BLE001
-        MediaPlayerEntityFeature = None  # type: ignore[assignment]
         er = None  # type: ignore[assignment]
 
-    registry = er.async_get(hass) if er is not None else None
+    try:
+        registry = er.async_get(hass) if er is not None else None
+    except Exception:  # noqa: BLE001
+        registry = None
     targets: list[dict[str, Any]] = []
     states = getattr(hass, "states", None)
     if states is None:
@@ -167,24 +161,7 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
         entry = registry.async_get(entity_id) if registry is not None else None
         platform = getattr(entry, "platform", None) if entry else None
         features = int(attrs.get("supported_features") or 0)
-        live_state = str(state.state or "unknown") not in {"unknown", "unavailable", "off"}
-        progress = live_state and any(k in attrs for k in ("media_position", "media_duration", "media_position_updated_at"))
-
-        can_seek = False
-        can_pause = False
-        can_stop = False
-        can_play_media = True
-        if MediaPlayerEntityFeature is not None:
-            can_seek = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "SEEK", 0))
-            can_pause = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "PAUSE", 0))
-            can_stop = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "STOP", 0))
-            can_play_media = _feature_enabled(features, getattr(MediaPlayerEntityFeature, "PLAY_MEDIA", 0)) if features else True
-
-        is_dlna = platform == "dlna_dmr"
-        limited = not live_state or (is_dlna and not progress)
-        seek_mode = "supported" if can_seek and progress else "none"
-        stop_mode = "supported" if can_stop else "best_effort"
-        artwork_mode = "metadata"
+        status = output_target_status(entity_id, state, platform)
 
         targets.append(
             {
@@ -193,22 +170,13 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "platform": platform,
                 "state": state.state,
                 "supported_features": features,
-                "capabilities": {
-                    "play_media": bool(can_play_media),
-                    "live_state": bool(live_state),
-                    "progress": bool(progress),
-                    "seek": seek_mode,
-                    "pause": "supported" if can_pause else ("best_effort" if is_dlna else "none"),
-                    "stop": stop_mode,
-                    "speed": False,
-                    "artwork": artwork_mode,
-                    "limited_controls": bool(limited),
-                    "raw_avtransport": False,
-                },
-                "notes": [
-                    "Does not report live progress" if not progress else "Reports live progress",
-                    "DLNA controls use Home Assistant media_player services" if is_dlna else "Generic HA media player",
-                ],
+                "status": status["status"],
+                "status_label": status["status_label"],
+                "playable": status["playable"],
+                "available": status["available"],
+                "reason": status["reason"],
+                "capabilities": status["capabilities"],
+                "notes": status["notes"],
             }
         )
 

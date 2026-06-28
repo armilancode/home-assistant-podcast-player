@@ -24,21 +24,18 @@ from .const import (
     EVENT_NEW_EPISODE,
     EVENT_PLAYBACK_PAUSED,
     EVENT_PLAYBACK_STARTED,
-    PLAYER_ENTITY_ID,
     USER_AGENT,
 )
 from .feed_parser import PodcastParseError, parse_podcast_feed
 from .speaker_proxy import make_signed_speaker_artwork_proxy_url, make_signed_speaker_proxy_url
 from .storage import PodcastStorage, make_feed_id, normalize_rss_url, utcnow_iso
+from .targets import UNAVAILABLE_MEDIA_PLAYER_STATES, is_external_media_player_entity_id, output_target_status
 
 _LOGGER = logging.getLogger(__name__)
 
 MAX_FEED_BODY_BYTES = 10 * 1024 * 1024
 FEED_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=20)
 MAX_PARALLEL_REFRESHES = 4
-UNAVAILABLE_MEDIA_PLAYER_STATES = {"unavailable", "unknown", "off"}
-
-
 def refresh_interval_from_settings(settings: dict[str, Any]) -> timedelta:
     """Return a safe refresh interval from persisted settings."""
     try:
@@ -634,26 +631,17 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _validate_media_player_output_target(self, entity_id: str) -> Any:
         """Validate that a media_player target is safe to use for podcast output."""
-        target_state = self._validate_media_player_control_target(entity_id, "playback")
-
-        try:
-            from homeassistant.components.media_player import MediaPlayerEntityFeature
-
-            features = int(target_state.attributes.get("supported_features") or 0)
-            if features and not features & int(MediaPlayerEntityFeature.PLAY_MEDIA):
-                raise HomeAssistantError(f"Target media player does not support play_media: {entity_id}")
-        except HomeAssistantError:
-            raise
-        except Exception:  # noqa: BLE001
-            # If HA changes feature internals, keep behavior permissive and let
-            # media_player.play_media return the authoritative service error.
-            pass
-
+        if not self._is_external_media_player_entity_id(entity_id):
+            raise HomeAssistantError("Target must be an external media_player entity")
+        target_state = self.hass.states.get(entity_id)
+        status = output_target_status(entity_id, target_state)
+        if not status["playable"]:
+            raise HomeAssistantError(str(status["reason"] or f"Target media player is not available: {entity_id}"))
         return target_state
 
     def _is_external_media_player_entity_id(self, entity_id: str) -> bool:
         """Return true for real output media_player entities."""
-        return entity_id.startswith("media_player.") and entity_id != PLAYER_ENTITY_ID
+        return is_external_media_player_entity_id(entity_id)
 
     def _validate_media_player_control_target(self, entity_id: str, action: str) -> Any:
         """Validate a target before calling a Home Assistant media_player service."""
