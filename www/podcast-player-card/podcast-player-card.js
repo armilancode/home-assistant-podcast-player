@@ -2,6 +2,7 @@ class PodcastPlayerCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    this._instanceId = `podcast-card-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this._config = {};
     this._rememberState = true;
     this._hass = null;
@@ -34,9 +35,15 @@ class PodcastPlayerCard extends HTMLElement {
     this._resetEpisodeScrollOnNextRender = false;
     this._currentSpeed = this._currentBrowserSpeed();
     this._audioListenersAttached = false;
+    this._pageLifecycleListenersAttached = false;
+    this._lastMediaSessionUpdate = 0;
     this._boundSharedSpeedHandler = (ev) => this._onSharedSpeedChanged(ev);
     this._boundSharedOutputHandler = (ev) => this._onSharedOutputChanged(ev);
     this._boundStorageHandler = (ev) => this._onStorageChanged(ev);
+    this._boundVisibilityHandler = () => this._onVisibilityChanged();
+    this._boundPageHideHandler = () => this._onPageHidden();
+    this._boundPageShowHandler = () => this._onPageShown();
+    this._boundWindowFocusHandler = () => this._onPageShown();
     this._boundAudioHandlers = {
       loadstart: () => this._onAudioLoading("loading"),
       waiting: () => this._onAudioLoading("buffering"),
@@ -70,9 +77,18 @@ class PodcastPlayerCard extends HTMLElement {
         preferredOutputTarget: PodcastPlayerCard._readOutputTargetPreference("browser"),
         targetMediaPlayer: null,
         targetMediaPlayerName: null,
+        sessionId: null,
+        ownerId: null,
+        lastSeenAt: 0,
+        mediaSessionSupported: PodcastPlayerCard._mediaSessionSupported(),
+        mediaSessionEpisodeId: null,
       };
     }
     return window[key];
+  }
+
+  static _mediaSessionSupported() {
+    return typeof navigator !== "undefined" && Boolean(navigator.mediaSession) && typeof window !== "undefined" && Boolean(window.MediaMetadata);
   }
 
   static _speedOptions() {
@@ -245,6 +261,174 @@ class PodcastPlayerCard extends HTMLElement {
     this._audioListenersAttached = false;
   }
 
+  _attachPageLifecycleListeners() {
+    if (this._pageLifecycleListenersAttached) return;
+    document.addEventListener("visibilitychange", this._boundVisibilityHandler);
+    window.addEventListener("pagehide", this._boundPageHideHandler);
+    window.addEventListener("pageshow", this._boundPageShowHandler);
+    window.addEventListener("focus", this._boundWindowFocusHandler);
+    this._pageLifecycleListenersAttached = true;
+  }
+
+  _detachPageLifecycleListeners() {
+    if (!this._pageLifecycleListenersAttached) return;
+    document.removeEventListener("visibilitychange", this._boundVisibilityHandler);
+    window.removeEventListener("pagehide", this._boundPageHideHandler);
+    window.removeEventListener("pageshow", this._boundPageShowHandler);
+    window.removeEventListener("focus", this._boundWindowFocusHandler);
+    this._pageLifecycleListenersAttached = false;
+  }
+
+  _onVisibilityChanged() {
+    if (document.visibilityState === "hidden") {
+      this._onPageHidden();
+      return;
+    }
+    this._onPageShown();
+  }
+
+  _onPageHidden() {
+    if (this._shared) this._shared.lastSeenAt = Date.now();
+    this._syncToShared();
+    this._updateMediaSession(true);
+    this._saveProgress(this._isActuallyPlaying());
+  }
+
+  _onPageShown() {
+    this._syncFromShared();
+    this._syncOutputState();
+    if (!this._isSpeakerOutput() && this._audio && !this._audio.paused && !this._audio.ended) {
+      this._startProgressTimer();
+      if (this._shared && this._shared.currentEpisode) this._currentEpisode = this._shared.currentEpisode;
+    }
+    if (!this._library && this._hass && !this._loading) this._loadLibrary();
+    this._updateMediaSession(true);
+    this._lastRenderKey = "";
+    this._scheduleRender();
+  }
+
+  _browserSessionNeedsTakeover() {
+    if (this._isSpeakerOutput() || !this._currentEpisode) return false;
+    const player = this._playerState();
+    if (player.current_episode_id !== this._currentEpisode.episode_id) return false;
+    if (player.state !== "playing") return false;
+    const hasLocalAudio = Boolean(this._audio && this._audio.src && this._hasBrowserAudioSession());
+    const localPlaying = hasLocalAudio && !this._audio.paused && !this._audio.ended;
+    return !localPlaying;
+  }
+
+  _browserSessionNotice() {
+    if (!this._browserSessionNeedsTakeover()) return "";
+    if (this._audio && this._audio.src) {
+      return "Browser playback was interrupted while the app was away. Press Resume to continue.";
+    }
+    return "Browser playback was active before this app view was restored. Press Take over to reconnect playback.";
+  }
+
+  _browserSessionNoticeMarkup() {
+    const message = this._browserSessionNotice();
+    return message ? `<div class="notice info">${this._escape(message)}</div>` : "";
+  }
+
+  _setMediaSessionAction(action, handler) {
+    if (!PodcastPlayerCard._mediaSessionSupported()) return;
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch (_) {}
+  }
+
+  _installMediaSessionActionHandlers() {
+    this._setMediaSessionAction("play", () => {
+      if (this._audio && this._audio.src && this._audio.paused) {
+        this._audio.play().catch((err) => {
+          this._error = this._errorText(err) || "Audio playback failed.";
+          this._render();
+        });
+        return;
+      }
+      this._togglePlay();
+    });
+    this._setMediaSessionAction("pause", () => {
+      if (this._audio && !this._audio.paused) {
+        this._audio.pause();
+        this._saveProgress(false);
+      }
+    });
+    this._setMediaSessionAction("stop", () => this._stop());
+    this._setMediaSessionAction("seekbackward", (details) => this._jump(-Math.abs(Number((details && details.seekOffset) || 15))));
+    this._setMediaSessionAction("seekforward", (details) => this._jump(Math.abs(Number((details && details.seekOffset) || 30))));
+    this._setMediaSessionAction("seekto", (details) => {
+      const seekTime = Number(details && details.seekTime);
+      if (!Number.isFinite(seekTime)) return;
+      const timing = this._displayPositionDuration();
+      this._jump(seekTime - Number(timing.position || 0));
+    });
+  }
+
+  _updateMediaSessionPosition(force = false) {
+    if (!PodcastPlayerCard._mediaSessionSupported() || !navigator.mediaSession.setPositionState || !this._currentEpisode) return;
+    const now = Date.now();
+    if (!force && now - this._lastMediaSessionUpdate < 1000) return;
+    this._lastMediaSessionUpdate = now;
+    const timing = this._displayPositionDuration();
+    const duration = Number(timing.duration || this._currentEpisode.duration_seconds || 0);
+    const position = Math.max(0, Math.min(Number(timing.position || 0), duration || Number(timing.position || 0)));
+    if (!(duration > 0) || !Number.isFinite(position)) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration,
+        playbackRate: this._currentBrowserSpeed(this._currentEpisode),
+        position,
+      });
+    } catch (_) {}
+  }
+
+  _updateMediaSession(force = false) {
+    if (!PodcastPlayerCard._mediaSessionSupported()) {
+      if (this._shared) this._shared.mediaSessionSupported = false;
+      return;
+    }
+    if (this._shared) this._shared.mediaSessionSupported = true;
+    if (!this._currentEpisode || this._isSpeakerOutput()) {
+      try {
+        navigator.mediaSession.playbackState = "none";
+      } catch (_) {}
+      return;
+    }
+
+    const ep = this._currentEpisode;
+    const art = this._artFor(ep);
+    if (force || !this._shared || this._shared.mediaSessionEpisodeId !== ep.episode_id) {
+      const artwork = art ? [
+        { src: art, sizes: "96x96" },
+        { src: art, sizes: "192x192" },
+        { src: art, sizes: "512x512" },
+      ] : [];
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: ep.title || "Podcast episode",
+          artist: this._feedTitleFor(ep),
+          album: this._feedTitleFor(ep),
+          artwork,
+        });
+        if (this._shared) this._shared.mediaSessionEpisodeId = ep.episode_id;
+      } catch (_) {}
+    }
+
+    this._installMediaSessionActionHandlers();
+    try {
+      navigator.mediaSession.playbackState = this._isActuallyPlaying() || this._isBrowserAudioLoading() ? "playing" : "paused";
+    } catch (_) {}
+    this._updateMediaSessionPosition(force);
+  }
+
+  _clearMediaSession() {
+    if (!PodcastPlayerCard._mediaSessionSupported()) return;
+    try {
+      navigator.mediaSession.playbackState = "none";
+    } catch (_) {}
+  }
+
   _syncFromShared() {
     // In speaker mode the backend is authoritative. Do not let an old
     // browser tab's shared audio session override the TV/speaker episode.
@@ -270,6 +454,11 @@ class PodcastPlayerCard extends HTMLElement {
     this._shared.outputMode = player.output_mode || "browser";
     this._shared.targetMediaPlayer = player.target_media_player || null;
     this._shared.targetMediaPlayerName = player.target_media_player_name || null;
+    this._shared.lastSeenAt = Date.now();
+    if (!this._isSpeakerOutput() && this._audio && this._audio.src && this._currentEpisode) {
+      this._shared.sessionId = this._shared.sessionId || `${this._currentEpisode.episode_id}:${Date.now()}`;
+      this._shared.ownerId = this._instanceId;
+    }
     if (!this._fixedOutputTarget) this._shared.preferredOutputTarget = this._preferredOutputTarget || "browser";
   }
 
@@ -329,22 +518,30 @@ class PodcastPlayerCard extends HTMLElement {
 
   connectedCallback() {
     this._attachAudioListeners();
+    this._attachPageLifecycleListeners();
     window.addEventListener("podcast-player-speed-changed", this._boundSharedSpeedHandler);
     window.addEventListener("podcast-player-output-target-changed", this._boundSharedOutputHandler);
     window.addEventListener("storage", this._boundStorageHandler);
     this._syncOutputState();
     this._syncFromShared();
+    this._onPageShown();
     if ((!this._audio.paused && !this._audio.ended) || (this._isSpeakerOutput() && !this._isLimitedSpeakerOutput())) this._startProgressTimer();
+    this._updateMediaSession(true);
     this._render();
   }
 
   disconnectedCallback() {
     this._saveProgress(!this._audio.paused);
+    const keepBrowserSession = !this._isSpeakerOutput() && this._audio && !this._audio.paused && !this._audio.ended;
     window.removeEventListener("podcast-player-speed-changed", this._boundSharedSpeedHandler);
     window.removeEventListener("podcast-player-output-target-changed", this._boundSharedOutputHandler);
     window.removeEventListener("storage", this._boundStorageHandler);
-    this._detachAudioListeners();
-    if (this._progressTimer) {
+    if (!keepBrowserSession) {
+      this._detachAudioListeners();
+      this._detachPageLifecycleListeners();
+      this._clearMediaSession();
+    }
+    if (this._progressTimer && !keepBrowserSession) {
       window.clearInterval(this._progressTimer);
       this._progressTimer = null;
     }
@@ -688,6 +885,7 @@ class PodcastPlayerCard extends HTMLElement {
     if (this._isBrowserAudioLoading()) return this._browserLoadState === "buffering" ? "Buffering…" : "Loading…";
     const target = this._selectedSpeakerTarget();
     if (this._isSpeakerOutput() && !this._targetCanPause(target)) return "Restart";
+    if (this._browserSessionNeedsTakeover()) return this._audio && this._audio.src ? "Resume" : "Take over";
     return playing ? "Pause" : "Play";
   }
 
@@ -783,6 +981,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   _playbackStatusText(playing = this._isActuallyPlaying()) {
     if (this._isBrowserAudioLoading()) return this._browserLoadState === "buffering" ? "buffering" : "loading";
+    if (this._browserSessionNeedsTakeover()) return "resume needed";
     return playing ? "playing" : "paused";
   }
 
@@ -800,12 +999,14 @@ class PodcastPlayerCard extends HTMLElement {
 
   _onAudioReady() {
     this._setBrowserLoadState("idle");
+    this._updateMediaSession();
     this._updateDynamicUi();
   }
 
   _onAudioPause() {
     this._setBrowserLoadState("idle");
     this._saveProgress(false);
+    this._updateMediaSession(true);
   }
 
   _syncOutputState() {
@@ -1001,6 +1202,10 @@ class PodcastPlayerCard extends HTMLElement {
     this._syncToShared();
     try {
       await this._audio.play();
+      this._shared.sessionId = `${ep.episode_id}:${Date.now()}`;
+      this._shared.ownerId = this._instanceId;
+      this._shared.lastSeenAt = Date.now();
+      this._updateMediaSession(true);
       this._startProgressTimer();
       this._lastRenderKey = "";
       this._render();
@@ -1013,6 +1218,10 @@ class PodcastPlayerCard extends HTMLElement {
         this._audio.load();
         try {
           await this._audio.play();
+          this._shared.sessionId = `${ep.episode_id}:${Date.now()}`;
+          this._shared.ownerId = this._instanceId;
+          this._shared.lastSeenAt = Date.now();
+          this._updateMediaSession(true);
           this._startProgressTimer();
           this._lastRenderKey = "";
           this._render();
@@ -1095,6 +1304,7 @@ class PodcastPlayerCard extends HTMLElement {
         this._audio.pause();
         await this._hass.callService("podcast_player", "pause", {});
         await this._saveProgress(false);
+        this._updateMediaSession(true);
         this._lastRenderKey = "";
         this._render();
       }, { timeoutMs: 12000 });
@@ -1171,10 +1381,13 @@ class PodcastPlayerCard extends HTMLElement {
     }
     this._audio.pause();
     this._audio.currentTime = 0;
+    this._shared.sessionId = null;
+    this._shared.ownerId = null;
     this._setBrowserLoadState("idle");
     this._syncToShared();
     await this._saveProgress(false);
     await this._hass.callService("podcast_player", "stop", {});
+    this._clearMediaSession();
     this._lastRenderKey = "";
     this._render();
   }
@@ -1248,12 +1461,14 @@ class PodcastPlayerCard extends HTMLElement {
       this._lastDynamicUpdate = now;
       this._updateDynamicUi();
     }
+    this._updateMediaSession();
   }
 
   _onLoadedMetadata() {
     if (this._currentEpisode && Number.isFinite(this._audio.duration)) {
       this._currentEpisode.duration_seconds = this._audio.duration;
       this._saveProgress(!this._audio.paused);
+      this._updateMediaSession(true);
       this._updateDynamicUi();
     }
   }
@@ -1265,6 +1480,9 @@ class PodcastPlayerCard extends HTMLElement {
       await this._saveProgress(false);
       await this._markPlayed(true);
     }
+    this._shared.sessionId = null;
+    this._shared.ownerId = null;
+    this._updateMediaSession(true);
   }
 
   async _onAudioError() {
@@ -1560,6 +1778,7 @@ class PodcastPlayerCard extends HTMLElement {
       pendingLabel: this._pendingLabel,
       browserLoadState: this._browserLoadState,
       browserAudioLoading: this._isBrowserAudioLoading(),
+      browserSessionNeedsTakeover: this._browserSessionNeedsTakeover(),
       error: this._error,
       info: this._info,
       selectedFeed: this._selectedFeed,
@@ -1770,6 +1989,7 @@ class PodcastPlayerCard extends HTMLElement {
 
           ${this._error ? `<div class="notice error">${e(this._error)}</div>` : ""}
           ${this._info ? `<div class="notice info">${e(this._info)}</div>` : ""}
+          ${this._browserSessionNoticeMarkup()}
 
           <div class="add">
             <input id="rss-url" type="url" placeholder="Paste podcast RSS URL…" />
@@ -1832,6 +2052,7 @@ class PodcastPlayerCard extends HTMLElement {
             </div>
             <button class="secondary" id="refresh" ${this._loading || actionPending ? "disabled" : ""}>Refresh</button>
           </div>
+          ${this._browserSessionNoticeMarkup()}
           <div class="compact-main">
             <div class="art">${ep && this._artFor(ep) ? `<img src="${e(this._artFor(ep))}" alt="" />` : `<div class="fallback">🎙️</div>`}</div>
             <div>
@@ -2052,6 +2273,7 @@ class PodcastPlayerCard extends HTMLElement {
       const speed = this.shadowRoot.querySelector("#speed");
       if (speed) speed.value = String(this._currentBrowserSpeed(this._currentEpisode));
     }
+    this._updateMediaSession(force);
   }
 
   _bindEvents() {
