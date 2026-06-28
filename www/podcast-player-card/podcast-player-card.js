@@ -91,6 +91,12 @@ class PodcastPlayerCard extends HTMLElement {
     return typeof navigator !== "undefined" && Boolean(navigator.mediaSession) && typeof window !== "undefined" && Boolean(window.MediaMetadata);
   }
 
+  static _isAndroidWebView() {
+    if (typeof navigator === "undefined") return false;
+    const ua = String(navigator.userAgent || "");
+    return /Android/i.test(ua) && (/\bwv\b/i.test(ua) || /; wv\)/i.test(ua) || /Version\/[\d.]+.*Chrome\/[\d.]+.*Mobile Safari/i.test(ua));
+  }
+
   static _speedOptions() {
     return [0.75, 1, 1.25, 1.5, 1.75, 2];
   }
@@ -796,6 +802,88 @@ class PodcastPlayerCard extends HTMLElement {
           ${targets.map((target) => `<option value="${e(target.entity_id)}" ${active === target.entity_id ? "selected" : ""}>${e(target.name)}</option>`).join("")}
         </select>
         ${note ? `<span class="cap-info" tabindex="0" aria-label="${e(note)}" title="${e(note)}">!</span>` : ""}
+      </div>
+    `;
+  }
+
+  _playbackStatusItems() {
+    const mediaSessionSupported = PodcastPlayerCard._mediaSessionSupported();
+    const androidWebView = PodcastPlayerCard._isAndroidWebView();
+    const selectedTarget = this._selectedSpeakerTarget();
+    const speakerState = this._selectedSpeakerState();
+    const speakerStateName = speakerState && speakerState.state ? String(speakerState.state) : "";
+    const unavailableTargetStates = new Set(["off", "unavailable", "unknown"]);
+    const prettyState = (state) => {
+      const value = String(state || "");
+      return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
+    };
+
+    let output = "Browser";
+    let outputState = "Ready";
+    if (this._isSpeakerOutput()) {
+      output = this._speakerTargetName();
+      outputState = unavailableTargetStates.has(speakerStateName) ? prettyState(speakerStateName) : (speakerStateName || "Active");
+    } else if (selectedTarget) {
+      output = this._outputNameFor(selectedTarget);
+      outputState = unavailableTargetStates.has(speakerStateName) ? prettyState(speakerStateName) : (this._targetSupportsLiveState(selectedTarget) ? "Ready" : "Unavailable");
+    }
+    const outputWarn = unavailableTargetStates.has(String(outputState).toLowerCase()) || outputState === "Unavailable";
+
+    let session = "Ready";
+    if (this._isSpeakerOutput()) {
+      session = "External";
+    } else if (this._isBrowserAudioLoading()) {
+      session = this._browserLoadState === "buffering" ? "Buffering" : "Loading";
+    } else if (this._browserSessionNeedsTakeover()) {
+      session = "Resume needed";
+    } else if (this._audio && !this._audio.paused && !this._audio.ended) {
+      session = "Active";
+    } else if (this._currentEpisode) {
+      session = "Paused";
+    }
+
+    return [
+      {
+        label: "Browser controls",
+        value: mediaSessionSupported ? "Supported" : "Unavailable",
+        state: mediaSessionSupported ? "ok" : "warn",
+        title: mediaSessionSupported
+          ? "This browser supports system media metadata and transport actions."
+          : "This browser does not expose the Media Session API to this card.",
+      },
+      {
+        label: "Mobile app",
+        value: androidWebView ? "Limited" : "Normal",
+        state: androidWebView ? "warn" : "ok",
+        title: androidWebView
+          ? "Android WebView does not expose full system media controls to dashboard cards."
+          : "No Android WebView media-control limitation detected.",
+      },
+      {
+        label: "Output",
+        value: outputState === "Ready" || outputState === "Active" ? output : `${output}: ${outputState}`,
+        state: outputWarn ? "warn" : "ok",
+        title: `Current output: ${output}${outputState ? ` (${outputState})` : ""}.`,
+      },
+      {
+        label: "Session",
+        value: session,
+        state: session === "Resume needed" ? "warn" : "ok",
+        title: "Current playback session state.",
+      },
+    ];
+  }
+
+  _renderPlaybackStatusPanel() {
+    const e = (v) => this._escape(v);
+    return `
+      <div class="playback-status-panel" aria-label="Playback status">
+        ${this._playbackStatusItems().map((item) => `
+          <div class="playback-status-item ${e(item.state)}" title="${e(item.title)}">
+            <span>${e(item.label)}</span>
+            <strong>${e(item.value)}</strong>
+          </div>
+        `).join("")}
       </div>
     `;
   }
@@ -1779,6 +1867,8 @@ class PodcastPlayerCard extends HTMLElement {
       browserLoadState: this._browserLoadState,
       browserAudioLoading: this._isBrowserAudioLoading(),
       browserSessionNeedsTakeover: this._browserSessionNeedsTakeover(),
+      mediaSessionSupported: PodcastPlayerCard._mediaSessionSupported(),
+      androidWebView: PodcastPlayerCard._isAndroidWebView(),
       error: this._error,
       info: this._info,
       selectedFeed: this._selectedFeed,
@@ -1897,6 +1987,11 @@ class PodcastPlayerCard extends HTMLElement {
       .desc { margin-top: 8px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
       .player-summary .desc { margin-top: 2px; -webkit-line-clamp: 2; }
       .player-control-panel { display: grid; gap: 10px; min-width: 0; }
+      .playback-status-panel { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+      .playback-status-item { min-width: 0; border: 1px solid color-mix(in srgb, var(--divider-color) 72%, transparent); border-radius: 12px; padding: 8px 10px; background: color-mix(in srgb, var(--card-background-color) 52%, transparent); }
+      .playback-status-item span { display: block; color: var(--secondary-text-color); font-size: .72rem; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .playback-status-item strong { display: block; margin-top: 3px; color: var(--primary-text-color); font-size: .84rem; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .playback-status-item.warn { border-color: color-mix(in srgb, var(--warning-color, #f6a623) 46%, var(--divider-color)); background: color-mix(in srgb, var(--warning-color, #f6a623) 10%, transparent); }
       .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; min-width: 0; max-width: 100%; }
       .meta-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin-top: 0; }
       .controls select { max-width: 100%; }
@@ -1951,6 +2046,7 @@ class PodcastPlayerCard extends HTMLElement {
         .player { padding: 10px; gap: 11px; }
         .player-hero { grid-template-columns: minmax(96px, 112px) minmax(0, 1fr); gap: 12px; }
         .player .art { width: 100%; border-radius: 14px; }
+        .playback-status-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .meta-controls { grid-template-columns: 1fr; }
         .transport-controls .mark-action { margin-left: 0; }
         .art { width: 88px; border-radius: 10px; }
@@ -2059,6 +2155,7 @@ class PodcastPlayerCard extends HTMLElement {
               <div class="ep-title">${ep ? e(ep.title || "Untitled episode") : "No episode selected"}</div>
               <div class="compact-status">${showProgress ? `<span>${e(this._formatTime(position))}</span><span>·</span><span>${e(this._formatTime(duration))}</span><span>·</span><span>${e(playbackStatus)}</span><span>·</span><span>${e(output)}</span>` : `<span>${e(output)}</span>`}</div>
               ${showProgress ? `<div class="progress-wrap"><div class="bar" id="progress-bar"><div></div></div></div>` : ""}
+              ${this._renderPlaybackStatusPanel()}
               <div class="compact-controls">
                 ${this._renderOutputSelect()}
                 ${canSpeed ? `<label class="speed-control compact-speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${ep && !actionPending ? "" : "disabled"}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
@@ -2178,6 +2275,7 @@ class PodcastPlayerCard extends HTMLElement {
         </div>
 
         <div class="player-control-panel">
+          ${this._renderPlaybackStatusPanel()}
           <div class="controls meta-controls">
             ${this._renderOutputSelect()}
             ${canSpeed ? `<label class="speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${actionPending ? "disabled" : ""}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
