@@ -36,6 +36,9 @@ _LOGGER = logging.getLogger(__name__)
 MAX_FEED_BODY_BYTES = 10 * 1024 * 1024
 FEED_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=20)
 MAX_PARALLEL_REFRESHES = 4
+ACTIVE_MEDIA_PLAYER_STATES = {"playing", "paused", "buffering"}
+
+
 def refresh_interval_from_settings(settings: dict[str, Any]) -> timedelta:
     """Return a safe refresh interval from persisted settings."""
     try:
@@ -598,20 +601,38 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         stopped = False
         errors: list[str] = []
 
-        if state is None or str(state.state) in {"unavailable", "unknown", "off"}:
+        state_value = str(state.state) if state is not None else None
+        target_is_active = state_value in ACTIVE_MEDIA_PLAYER_STATES
+        if state is None or not target_is_active:
             message = f"Target media player is not available for stopping: {target}"
             errors.append(message)
-            if target == player.get("target_media_player"):
-                stopped = True
-                _LOGGER.info("Podcast Player clearing unavailable active target=%s", target)
+            stopped = True
+            _LOGGER.info(
+                "Podcast Player clearing inactive target=%s state=%r active_target=%s",
+                target,
+                state_value,
+                target == player.get("target_media_player"),
+            )
         if not stopped:
-            if state is None:
-                player["last_target_media_player"] = target
-                player["last_target_media_player_name"] = target_name
-                player["speaker_last_error"] = "; ".join(errors)
-                await self.storage.async_save()
-                self.async_set_updated_data(self.storage.snapshot())
-                raise HomeAssistantError(player["speaker_last_error"])
+            target_status = output_target_status(target, state)
+            if target_status["capabilities"].get("stop") != "supported":
+                message = f"Target media player does not support stop: {target}"
+                errors.append(message)
+                if target == player.get("target_media_player"):
+                    stopped = True
+                    _LOGGER.info(
+                        "Podcast Player clearing active target without media_stop target=%s state=%r",
+                        target,
+                        state_value,
+                    )
+                else:
+                    player["last_target_media_player"] = target
+                    player["last_target_media_player_name"] = target_name
+                    player["speaker_last_error"] = "; ".join(errors)
+                    await self.storage.async_save()
+                    self.async_set_updated_data(self.storage.snapshot())
+                    raise HomeAssistantError(message)
+        if not stopped:
             try:
                 await self.hass.services.async_call(
                     "media_player",

@@ -206,17 +206,70 @@ def test_stop_unavailable_active_target_clears_without_service_call() -> None:
     assert not coord.hass.services.called
 
 
-def test_stop_missing_inactive_target_fails_without_service_call() -> None:
-    """Stopping a missing last target must not call media_stop."""
+def test_stop_missing_inactive_target_clears_without_service_call() -> None:
+    """Stopping a missing inactive target is idempotent and must not call media_stop."""
     coord = _coordinator(None)
     coord.storage.data["player"]["last_target_media_player"] = "media_player.old_speaker"
 
-    with pytest.raises(HomeAssistantError):
-        asyncio.run(coord.async_stop_media_player())
+    asyncio.run(coord.async_stop_media_player())
 
     assert coord.storage.saved
-    assert coord.storage.data["player"]["speaker_last_error"]
+    assert coord.storage.data["player"]["speaker_last_error"] is None
     assert not coord.hass.services.called
+
+
+def test_stop_idle_active_target_clears_without_service_call() -> None:
+    """Stopping an already-idle active target clears local speaker output."""
+    state = SimpleNamespace(state="idle", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["player"]["state"] = "paused"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+
+    asyncio.run(coord.async_stop_media_player("media_player.kitchen_speaker"))
+
+    assert coord.storage.data["player"]["state"] == "idle"
+    assert coord.storage.data["player"]["output_mode"] == "browser"
+    assert coord.storage.data["player"]["speaker_last_error"] is None
+    assert coord.storage.saved
+    assert not coord.hass.services.called
+
+
+def test_stop_active_target_without_stop_feature_clears_without_service_call() -> None:
+    """A no-stop target must not receive unsupported media_stop when clearing output."""
+    state = SimpleNamespace(state="paused", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["player"]["state"] = "paused"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+
+    asyncio.run(coord.async_stop_media_player("media_player.kitchen_speaker"))
+
+    assert coord.storage.data["player"]["state"] == "idle"
+    assert coord.storage.data["player"]["output_mode"] == "browser"
+    assert coord.storage.data["player"]["speaker_last_error"] is None
+    assert coord.storage.saved
+    assert not coord.hass.services.called
+
+
+def test_stop_active_target_with_stop_feature_calls_media_stop() -> None:
+    """A target that advertises STOP receives the supported HA media_stop action."""
+    from homeassistant.components.media_player import MediaPlayerEntityFeature
+
+    features = int(MediaPlayerEntityFeature.STOP)
+    state = SimpleNamespace(state="playing", attributes={"supported_features": features}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["player"]["state"] = "playing"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+
+    asyncio.run(coord.async_stop_media_player("media_player.kitchen_speaker"))
+
+    args, kwargs = coord.hass.services.calls[0]
+    assert args == ("media_player", "media_stop", {"entity_id": "media_player.kitchen_speaker"})
+    assert kwargs == {"blocking": True}
+    assert coord.storage.data["player"]["state"] == "idle"
+    assert coord.storage.data["player"]["output_mode"] == "browser"
 
 
 def test_pause_off_active_target_clears_without_service_call() -> None:

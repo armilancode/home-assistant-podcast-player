@@ -1007,9 +1007,20 @@ class PodcastPlayerCard extends HTMLElement {
     return String(caps.pause || "none");
   }
 
+  _targetStopMode(target) {
+    if (!target || target === "browser") return "supported";
+    const caps = this._targetCapabilities(target);
+    return String(caps.stop || "none");
+  }
+
   _targetCanPause(target) {
     if (!target || target === "browser") return true;
     return this._targetSupportsLiveState(target) && this._targetPauseMode(target) === "supported";
+  }
+
+  _targetCanStop(target) {
+    if (!target || target === "browser") return true;
+    return this._targetSupportsLiveState(target) && this._targetStopMode(target) === "supported";
   }
 
   _targetCanSeek(target) {
@@ -1538,7 +1549,7 @@ class PodcastPlayerCard extends HTMLElement {
       // Only use the native HA media_stop fallback for targets that report a
       // useful state. Some DLNA targets report unknown and HA rejects
       // media_stop, so falling back there only creates fake success/errors.
-      if (!stopped && target && this._targetSupportsLiveState(target)) {
+      if (!stopped && target && this._targetSupportsLiveState(target) && this._targetCanStop(target)) {
         try {
           await this._nativeStopTarget(target);
           stopped = true;
@@ -1554,7 +1565,9 @@ class PodcastPlayerCard extends HTMLElement {
       this._lastSpeakerTarget = target || this._lastSpeakerTarget;
       if (target) this._writePreference("last_speaker_target", target);
       this._setSharedOutputTarget("browser", true, true);
-      this._info = target ? `Stop command sent to ${this._outputNameFor(target)}.` : "Stop command sent to external player.";
+      this._info = target && this._targetCanStop(target)
+        ? `Stop command sent to ${this._outputNameFor(target)}.`
+        : "Output set to Browser.";
       this._error = null;
       this._library = null;
       await this._loadLibrary();
