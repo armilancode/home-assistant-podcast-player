@@ -17,6 +17,7 @@ from custom_components.podcast_player.config_flow import (
 from custom_components.podcast_player.const import (
     CONF_DEFAULT_PLAYBACK_SPEED,
     CONF_DIRECT_FIRST,
+    CONF_ENHANCED_DLNA_CONTROLS,
     CONF_MAX_EPISODES_PER_FEED,
     CONF_PLAYED_THRESHOLD,
     CONF_REFRESH_INTERVAL_MINUTES,
@@ -40,6 +41,7 @@ def test_normalize_options_merges_defaults() -> None:
         CONF_DEFAULT_PLAYBACK_SPEED: DEFAULT_PLAYBACK_SPEED,
         CONF_PLAYED_THRESHOLD: DEFAULT_PLAYED_THRESHOLD,
         CONF_DIRECT_FIRST: True,
+        CONF_ENHANCED_DLNA_CONTROLS: True,
     }
 
 
@@ -52,6 +54,7 @@ def test_options_from_user_input_maps_url_mode() -> None:
             CONF_DEFAULT_PLAYBACK_SPEED: 1.25,
             CONF_PLAYED_THRESHOLD: 0.9,
             CONF_URL_MODE_PREFERENCE: URL_MODE_SIGNED_PROXY,
+            CONF_ENHANCED_DLNA_CONTROLS: False,
         }
     )
 
@@ -61,6 +64,7 @@ def test_options_from_user_input_maps_url_mode() -> None:
         CONF_DEFAULT_PLAYBACK_SPEED: 1.25,
         CONF_PLAYED_THRESHOLD: 0.9,
         CONF_DIRECT_FIRST: False,
+        CONF_ENHANCED_DLNA_CONTROLS: False,
     }
 
 

@@ -11,7 +11,8 @@
           "max_episodes_per_feed": "Maximum cached episodes per feed",
           "default_playback_speed": "Default playback speed",
           "played_threshold": "Played threshold",
-          "url_mode_preference": "Media player URL preference"
+          "url_mode_preference": "Media player URL preference",
+          "enhanced_dlna_controls": "Enhanced DLNA controls"
         },
         "data_description": {
           "initial_rss_url": "Optional. Paste a podcast RSS feed URL to add it during setup.",
@@ -19,7 +20,8 @@
           "max_episodes_per_feed": "How many recent episodes to keep cached per feed. Listening progress is preserved when old cached episodes are trimmed.",
           "default_playback_speed": "Default speed used for podcast playback.",
           "played_threshold": "Fraction of an episode that must be listened to before it is marked played.",
-          "url_mode_preference": "Direct sends the original podcast audio URL. Signed proxy uses a temporary Home Assistant URL for media players that cannot reach the original URL."
+          "url_mode_preference": "Direct sends the original podcast audio URL. Signed proxy uses a temporary Home Assistant URL for media players that cannot reach the original URL.",
+          "enhanced_dlna_controls": "Use supported DLNA transport actions for stop, seek, and progress when Home Assistant media-player state does not expose them."
         }
       }
     },
@@ -41,6 +43,7 @@
           "default_playback_speed": "Default playback speed",
           "played_threshold": "Played threshold",
           "url_mode_preference": "Media player URL preference",
+          "enhanced_dlna_controls": "Enhanced DLNA controls",
           "new_feed_url": "Add podcast RSS URL",
           "remove_feed_id": "Remove podcast feed",
           "remove_feed_keep_history": "Keep listening history when removing"
@@ -51,6 +54,7 @@
           "default_playback_speed": "Default speed used for podcast playback.",
           "played_threshold": "Fraction of an episode that must be listened to before it is marked played.",
           "url_mode_preference": "Direct sends the original podcast audio URL. Signed proxy uses a temporary Home Assistant URL for media players that cannot reach the original URL.",
+          "enhanced_dlna_controls": "Use supported DLNA transport actions for stop, seek, and progress when Home Assistant media-player state does not expose them.",
           "new_feed_url": "Optional. Paste a podcast RSS feed URL to add it.",
           "remove_feed_id": "Optional. Choose a feed to remove.",
           "remove_feed_keep_history": "If enabled, episode progress is preserved after the feed is removed."

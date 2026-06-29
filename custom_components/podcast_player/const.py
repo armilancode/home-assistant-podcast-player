@@ -60,6 +60,7 @@ ALLOWED_SPEEDS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 
 CONF_DEFAULT_PLAYBACK_SPEED = "default_playback_speed"
 CONF_DIRECT_FIRST = "direct_first"
+CONF_ENHANCED_DLNA_CONTROLS = "enhanced_dlna_controls"
 CONF_INITIAL_RSS_URL = "initial_rss_url"
 CONF_MAX_EPISODES_PER_FEED = "max_episodes_per_feed"
 CONF_NEW_FEED_URL = "new_feed_url"

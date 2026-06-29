@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from custom_components.podcast_player.api import _public_episode, _public_output_targets
+from custom_components.podcast_player.api import _public_episode, _public_output_targets, _public_settings
 from custom_components.podcast_player.const import DOMAIN, PLAYER_ENTITY_ID
 
 
@@ -22,6 +22,22 @@ def test_public_episode_includes_media_source_id() -> None:
     assert payload["media_source_id"] == f"media-source://{DOMAIN}/episode/ep_123"
     assert payload["audio_url"] == "https://example.test/episode.mp3"
     assert payload["proxy_url"] == "/api/podcast_player/proxy/ep_123"
+
+
+def test_public_settings_hide_proxy_secret() -> None:
+    """Frontend settings must not expose internal proxy secrets."""
+    payload = _public_settings(
+        {
+            "default_playback_speed": 1.0,
+            "enhanced_dlna_controls": True,
+            "speaker_proxy_secret": "secret-value",
+        }
+    )
+
+    assert payload == {
+        "default_playback_speed": 1.0,
+        "enhanced_dlna_controls": True,
+    }
 
 
 class FakeStates:

@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.podcast_player.const import PLAYER_ENTITY_ID
 from custom_components.podcast_player.coordinator import PodcastUpdateCoordinator
+from custom_components.podcast_player.external_control import ExternalPlaybackStatus
 from custom_components.podcast_player.storage import default_data
 
 
@@ -103,8 +104,45 @@ def _coordinator(state: object | None) -> PodcastUpdateCoordinator:
     coord = PodcastUpdateCoordinator.__new__(PodcastUpdateCoordinator)
     coord.storage = FakeStorage()
     coord.hass = SimpleNamespace(states=FakeStates(state), services=FakeServices(), bus=FakeBus())
+    coord._external_control = None
+    coord._external_poll_task = None
     coord.async_set_updated_data = lambda data: None
     return coord
+
+
+class FakeExternalControl:
+    """Fake enhanced external control adapter."""
+
+    def __init__(self, status: ExternalPlaybackStatus) -> None:
+        self.status = status
+        self.stopped = False
+        self.seek_position = None
+
+    async def async_status(self, description_url: str) -> ExternalPlaybackStatus:
+        """Return configured status."""
+        return self.status
+
+    async def async_stop(self, description_url: str) -> None:
+        """Record stop."""
+        self.stopped = True
+
+    async def async_seek(self, description_url: str, position: float) -> None:
+        """Record seek."""
+        self.seek_position = position
+
+    async def async_pause(self, description_url: str) -> None:
+        """Record pause."""
+        self.status.state = "paused"
+
+    async def async_play(self, description_url: str) -> None:
+        """Record play."""
+        self.status.state = "playing"
+
+
+def _enable_fake_dlna(coord: PodcastUpdateCoordinator, control: FakeExternalControl) -> None:
+    """Enable fake enhanced DLNA control."""
+    coord._external_control = control
+    coord._dlna_description_url = lambda target: "http://example.test/device.xml"  # type: ignore[method-assign]
 
 
 def test_playback_target_off_fails_before_service_call() -> None:
@@ -190,6 +228,33 @@ def test_playback_metadata_includes_dlna_artist_and_album_fields() -> None:
     assert metadata["releaseDate"] == "2026-06-29T10:00:00+00:00"
 
 
+def test_play_on_media_player_creates_sanitized_external_session() -> None:
+    """External playback creates backend-owned session state without raw URLs."""
+    state = SimpleNamespace(state="idle", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["feeds"]["feed-1"] = {"feed_id": "feed-1", "title": "Example Podcast"}
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "feed_id": "feed-1",
+        "title": "Example Episode",
+        "audio_url": "https://example.test/episode.mp3",
+        "duration_seconds": 3600,
+    }
+
+    asyncio.run(coord.async_play_on_media_player("media_player.kitchen_speaker", episode_id="episode-1"))
+
+    player = coord.storage.data["player"]
+    session = player["external_session"]
+    assert player["output_mode"] == "speaker"
+    assert session["active"] is True
+    assert session["episode_id"] == "episode-1"
+    assert session["target_media_player"] == "media_player.kitchen_speaker"
+    assert session["position"] == 0
+    assert session["duration"] == 3600
+    assert session["media_content_id_hash"]
+    assert session["media_content_id_hash"] != "https://example.test/episode.mp3"
+
+
 def test_stop_unavailable_active_target_clears_without_service_call() -> None:
     """Stopping an unavailable active target clears local state without direct internals."""
     state = SimpleNamespace(state="unavailable", attributes={}, name="Kitchen Speaker")
@@ -236,20 +301,119 @@ def test_stop_idle_active_target_clears_without_service_call() -> None:
 
 
 def test_stop_active_target_without_stop_feature_clears_without_service_call() -> None:
-    """A no-stop target must not receive unsupported media_stop when clearing output."""
+    """A no-stop active target must not be fake-cleared as stopped."""
     state = SimpleNamespace(state="paused", attributes={}, name="Kitchen Speaker")
     coord = _coordinator(state)
     coord.storage.data["player"]["state"] = "paused"
     coord.storage.data["player"]["output_mode"] = "speaker"
     coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
 
-    asyncio.run(coord.async_stop_media_player("media_player.kitchen_speaker"))
+    with pytest.raises(HomeAssistantError):
+        asyncio.run(coord.async_stop_media_player("media_player.kitchen_speaker"))
 
-    assert coord.storage.data["player"]["state"] == "idle"
-    assert coord.storage.data["player"]["output_mode"] == "browser"
-    assert coord.storage.data["player"]["speaker_last_error"] is None
+    assert coord.storage.data["player"]["state"] == "paused"
+    assert coord.storage.data["player"]["output_mode"] == "speaker"
+    assert coord.storage.data["player"]["speaker_last_error"]
     assert coord.storage.saved
     assert not coord.hass.services.called
+
+
+def test_stop_uses_backend_session_target_with_dlna_fallback() -> None:
+    """Stopping from another device uses the backend session target even if flat state was lost."""
+    state = SimpleNamespace(state="playing", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "audio_url": "https://example.test/episode.mp3",
+    }
+    session = coord.storage.data["player"]["external_session"]
+    session.update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+            "target_media_player_name": "Kitchen Speaker",
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="playing",
+            current_media_id="https://example.test/episode.mp3",
+            supported_actions={"Stop", "Seek"},
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    asyncio.run(coord.async_stop_media_player())
+
+    assert control.stopped is True
+    assert coord.storage.data["player"]["state"] == "idle"
+    assert coord.storage.data["player"]["output_mode"] == "browser"
+    assert coord.storage.data["player"]["external_session"]["active"] is False
+    assert not coord.hass.services.called
+
+
+def test_stop_protects_unrelated_dlna_media_without_force() -> None:
+    """Safe-stop refuses to stop unrelated target media."""
+    state = SimpleNamespace(state="playing", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "audio_url": "https://example.test/episode.mp3",
+    }
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="playing",
+            current_media_id="https://example.test/other.mp3",
+            supported_actions={"Stop"},
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    with pytest.raises(HomeAssistantError):
+        asyncio.run(coord.async_stop_media_player())
+
+    assert control.stopped is False
+    assert coord.storage.data["player"]["external_session"]["active"] is True
+
+
+def test_stop_force_allows_unrelated_dlna_media() -> None:
+    """Force stop explicitly overrides safe-stop protection."""
+    state = SimpleNamespace(state="playing", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "audio_url": "https://example.test/episode.mp3",
+    }
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="playing",
+            current_media_id="https://example.test/other.mp3",
+            supported_actions={"Stop"},
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    asyncio.run(coord.async_stop_media_player(force=True))
+
+    assert control.stopped is True
 
 
 def test_stop_active_target_with_stop_feature_calls_media_stop() -> None:
@@ -322,3 +486,41 @@ def test_seek_off_active_target_saves_progress_without_service_call() -> None:
     assert coord.storage.data["player"]["output_mode"] == "browser"
     assert coord.storage.data["progress"]["episode-1"]["position"] == 42
     assert not coord.hass.services.called
+
+
+def test_external_session_poll_saves_dlna_progress() -> None:
+    """Backend polling saves DLNA progress for all cards/devices."""
+    state = SimpleNamespace(state="playing", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["player"]["state"] = "playing"
+    coord.storage.data["player"]["current_episode_id"] = "episode-1"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="playing",
+            transport_state="PLAYING",
+            position=88,
+            duration=3600,
+            current_media_id="https://example.test/episode.mp3",
+            supported_actions={"Stop", "Seek", "Pause"},
+            progress_source="dlna",
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    asyncio.run(coord.async_update_external_session())
+
+    session = coord.storage.data["player"]["external_session"]
+    assert session["position"] == 88
+    assert session["duration"] == 3600
+    assert session["progress_source"] == "dlna"
+    assert coord.storage.data["progress"]["episode-1"]["position"] == 88

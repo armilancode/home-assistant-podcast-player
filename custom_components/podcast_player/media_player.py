@@ -126,6 +126,7 @@ class PodcastPlayerEntity(CoordinatorEntity[PodcastUpdateCoordinator], MediaPlay
         episode = self._current_episode() or {}
         feed = self._current_feed() or {}
         progress = storage.data["progress"].get(player.get("current_episode_id"), {})
+        external_session = dict(player.get("external_session") or {})
         return {
             "current_episode_id": player.get("current_episode_id"),
             "current_feed_id": player.get("current_feed_id"),
@@ -145,6 +146,7 @@ class PodcastPlayerEntity(CoordinatorEntity[PodcastUpdateCoordinator], MediaPlay
             "speaker_url_mode": player.get("speaker_url_mode"),
             "speaker_media_content_type": player.get("speaker_media_content_type"),
             "speaker_last_error": player.get("speaker_last_error"),
+            "external_session": external_session,
             "played": progress.get("played"),
             "last_played_at": progress.get("last_played_at"),
             "browser_audio_required": True,

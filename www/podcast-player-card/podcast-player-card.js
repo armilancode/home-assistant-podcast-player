@@ -457,9 +457,10 @@ class PodcastPlayerCard extends HTMLElement {
     this._setSharedBrowserSpeed(this._currentBrowserSpeed(this._currentEpisode), false, false);
     this._shared.useProxy = Boolean(this._useProxyForCurrent);
     const player = this._playerState();
+    const speakerTarget = this._speakerTargetEntity();
     this._shared.outputMode = player.output_mode || "browser";
-    this._shared.targetMediaPlayer = player.target_media_player || null;
-    this._shared.targetMediaPlayerName = player.target_media_player_name || null;
+    this._shared.targetMediaPlayer = speakerTarget;
+    this._shared.targetMediaPlayerName = speakerTarget ? this._speakerTargetName() : null;
     this._shared.lastSeenAt = Date.now();
     if (!this._isSpeakerOutput() && this._audio && this._audio.src && this._currentEpisode) {
       this._shared.sessionId = this._shared.sessionId || `${this._currentEpisode.episode_id}:${Date.now()}`;
@@ -694,6 +695,7 @@ class PodcastPlayerCard extends HTMLElement {
       speaker_url_mode: "speaker_url_mode",
       speaker_media_content_type: "speaker_media_content_type",
       speaker_last_error: "speaker_last_error",
+      external_session: "external_session",
     };
     Object.entries(map).forEach(([from, to]) => {
       if (attrs[from] !== undefined && attrs[from] !== null) base[to] = attrs[from];
@@ -703,16 +705,30 @@ class PodcastPlayerCard extends HTMLElement {
 
   _isSpeakerOutput() {
     const player = this._playerState();
-    return player.output_mode === "speaker" && Boolean(player.target_media_player);
+    const session = this._externalSession();
+    return (player.output_mode === "speaker" && Boolean(player.target_media_player)) || Boolean(session.active && session.target_media_player);
   }
 
   _speakerTargetEntity() {
-    return this._playerState().target_media_player || null;
+    const player = this._playerState();
+    const session = this._externalSession();
+    return player.target_media_player || session.target_media_player || null;
   }
 
   _speakerTargetName() {
     const player = this._playerState();
-    return player.target_media_player_name || player.target_media_player || "speaker";
+    const session = this._externalSession();
+    return player.target_media_player_name || session.target_media_player_name || player.target_media_player || session.target_media_player || "speaker";
+  }
+
+  _externalSession() {
+    const player = this._playerState();
+    return (player && player.external_session && typeof player.external_session === "object") ? player.external_session : {};
+  }
+
+  _hasExternalSession() {
+    const session = this._externalSession();
+    return Boolean(session.active && session.target_media_player);
   }
   _availableOutputTargets() {
     const backendTargets = (this._library && Array.isArray(this._library.output_targets)) ? this._library.output_targets : [];
@@ -1015,12 +1031,14 @@ class PodcastPlayerCard extends HTMLElement {
 
   _targetCanPause(target) {
     if (!target || target === "browser") return true;
-    return this._targetSupportsLiveState(target) && this._targetPauseMode(target) === "supported";
+    const mode = this._targetPauseMode(target);
+    return this._targetSupportsLiveState(target) && (mode === "supported" || mode === "best_effort");
   }
 
   _targetCanStop(target) {
     if (!target || target === "browser") return true;
-    return this._targetSupportsLiveState(target) && this._targetStopMode(target) === "supported";
+    const mode = this._targetStopMode(target);
+    return this._targetSupportsLiveState(target) && (mode === "supported" || mode === "best_effort");
   }
 
   _targetCanSeek(target) {
@@ -1086,6 +1104,8 @@ class PodcastPlayerCard extends HTMLElement {
 
   _isLimitedSpeakerOutput() {
     const target = this._speakerTargetEntity();
+    const session = this._externalSession();
+    if (session.active && session.progress_source && session.progress_source !== "unavailable") return false;
     return this._isSpeakerOutput() && this._targetLimitedByCapabilities(target);
   }
 
@@ -1101,10 +1121,25 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _speakerTiming() {
+    const session = this._externalSession();
     const state = this._speakerState();
     const attrs = (state && state.attributes) || {};
     const ep = this._currentEpisode || {};
     const target = this._speakerTargetEntity();
+    if (session.active && session.target_media_player) {
+      let position = Number(session.position ?? this._playerState().position ?? ep.position ?? 0);
+      const duration = Number(session.duration || this._playerState().duration || ep.duration_seconds || 0);
+      const progressSource = String(session.progress_source || "");
+      const updated = session.status_updated_at ? new Date(session.status_updated_at).getTime() : 0;
+      const playing = this._playerState().state === "playing" || String(session.transport_state || "").toLowerCase() === "playing";
+      if (playing && Number.isFinite(updated) && updated > 0) position += Math.max(0, (Date.now() - updated) / 1000);
+      if (duration > 0) position = Math.min(position, duration);
+      return {
+        position: Math.max(0, position || 0),
+        duration: Math.max(0, duration || 0),
+        limited: progressSource === "unavailable",
+      };
+    }
     if (!this._targetSupportsProgress(target)) {
       return { position: 0, duration: Number(ep.duration_seconds || this._playerState().duration || 0), limited: true };
     }
@@ -1129,6 +1164,10 @@ class PodcastPlayerCard extends HTMLElement {
 
   _isActuallyPlaying() {
     if (this._isSpeakerOutput()) {
+      const session = this._externalSession();
+      if (session.active && session.transport_state) {
+        return String(session.transport_state).toLowerCase() === "playing";
+      }
       if (this._isLimitedSpeakerOutput()) return this._playerState().state === "playing";
       const state = this._speakerState();
       if (state && state.state) return state.state === "playing";
@@ -1193,8 +1232,8 @@ class PodcastPlayerCard extends HTMLElement {
     if (this._isSpeakerOutput()) {
       if (!this._audio.paused) this._audio.pause();
       this._shared.outputMode = "speaker";
-      this._shared.targetMediaPlayer = player.target_media_player || null;
-      this._shared.targetMediaPlayerName = player.target_media_player_name || null;
+      this._shared.targetMediaPlayer = this._speakerTargetEntity();
+      this._shared.targetMediaPlayerName = this._speakerTargetName();
       if (!this._isLimitedSpeakerOutput() && this._isActuallyPlaying()) this._startProgressTimer();
     } else {
       this._shared.outputMode = "browser";
@@ -1525,49 +1564,24 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _stop() {
-    const selectedTarget = this._selectedSpeakerTarget();
-    const activeSpeakerTarget = this._speakerTargetEntity();
-    const lastSpeakerTarget = this._lastSpeakerTarget || this._readPreference("last_speaker_target", "") || null;
     const browserPlaying = !this._audio.paused && !this._audio.ended;
+    const target = this._speakerTargetEntity();
 
-    // If the UI/backend already fell back to Browser while an external DLNA TV
-    // kept playing, do not lose the target. Reuse the last known speaker target
-    // when browser audio itself is not playing.
-    if (this._isSpeakerOutput() || selectedTarget || (!browserPlaying && lastSpeakerTarget)) {
-      const target = activeSpeakerTarget || selectedTarget || lastSpeakerTarget;
-      let stopped = false;
-      let lastErr = null;
+    if (this._hasExternalSession() || this._isSpeakerOutput()) {
       try {
         this._info = target ? `Stopping ${this._outputNameFor(target)}…` : "Stopping external player…";
         this._error = null;
         this._render();
-        await this._hass.callService("podcast_player", "stop_media_player", target ? { media_player_entity_id: target } : {});
-        stopped = true;
+        await this._hass.callService("podcast_player", "stop", {});
       } catch (err) {
-        lastErr = err;
-      }
-      // Only use the native HA media_stop fallback for targets that report a
-      // useful state. Some DLNA targets report unknown and HA rejects
-      // media_stop, so falling back there only creates fake success/errors.
-      if (!stopped && target && this._targetSupportsLiveState(target) && this._targetCanStop(target)) {
-        try {
-          await this._nativeStopTarget(target);
-          stopped = true;
-        } catch (err) {
-          lastErr = err;
-        }
-      }
-      if (!stopped) {
-        this._error = this._errorText(lastErr) || `Could not stop ${this._outputNameFor(target)}.`;
+        this._error = this._errorText(err) || `Could not stop ${this._outputNameFor(target)}.`;
         this._render();
         return;
       }
       this._lastSpeakerTarget = target || this._lastSpeakerTarget;
       if (target) this._writePreference("last_speaker_target", target);
       this._setSharedOutputTarget("browser", true, true);
-      this._info = target && this._targetCanStop(target)
-        ? `Stop command sent to ${this._outputNameFor(target)}.`
-        : "Output set to Browser.";
+      this._info = target ? `Stop command sent to ${this._outputNameFor(target)}.` : "Playback stopped.";
       this._error = null;
       this._library = null;
       await this._loadLibrary();
@@ -1768,7 +1782,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._error = null;
 
     if (nextTarget === "browser") {
-      if (this._isSpeakerOutput()) {
+      if (this._isSpeakerOutput() || this._hasExternalSession()) {
         await this._withPendingAction("switch_browser", "Switching to browser playback", () => this._stop(), { timeoutMs: 18000 });
         // _stop writes Browser only after the stop command path succeeds.
       } else {
@@ -1990,7 +2004,8 @@ class PodcastPlayerCard extends HTMLElement {
       episodeId: ep && ep.episode_id,
       playing: this._isActuallyPlaying(),
       outputMode: this._playerState().output_mode || "browser",
-      target: this._playerState().target_media_player || "",
+      target: this._speakerTargetEntity() || "",
+      externalSession: `${this._externalSession().active || false}:${this._externalSession().transport_state || ""}:${this._externalSession().position || 0}:${this._externalSession().progress_source || ""}`,
       preferredOutputTarget: this._preferredOutputTarget || "browser",
       canSpeed: this._selectedCanSpeed(),
       currentSpeed: this._currentBrowserSpeed(ep),

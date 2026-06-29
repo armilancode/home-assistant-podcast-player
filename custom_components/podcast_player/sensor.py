@@ -393,7 +393,8 @@ class CurrentOutputSensor(PodcastBaseSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        target = self._player.get("target_media_player")
+        session = self._player.get("external_session") or {}
+        target = self._player.get("target_media_player") or session.get("target_media_player")
         target_state = self.coordinator.hass.states.get(target) if target else None
         attrs = target_state.attributes if target_state else {}
         target_state_value = target_state.state if target_state else None
@@ -408,11 +409,15 @@ class CurrentOutputSensor(PodcastBaseSensor):
         )
         return {
             "target_media_player": target,
-            "target_media_player_name": self._player.get("target_media_player_name"),
+            "target_media_player_name": self._player.get("target_media_player_name") or session.get("target_media_player_name"),
             "target_state": target_state_value,
             "target_reports_live_state": reports_live_state,
             "target_reports_progress": reports_progress,
-            "external_limited_controls": bool(target and not reports_live_state),
+            "external_session_active": bool(session.get("active")),
+            "external_transport_state": session.get("transport_state"),
+            "external_progress_source": session.get("progress_source"),
+            "external_control_source": session.get("control_source"),
+            "external_limited_controls": bool(target and not reports_live_state and session.get("progress_source") == "unavailable"),
             "speaker_url_mode": self._player.get("speaker_url_mode"),
             "speaker_media_content_type": self._player.get("speaker_media_content_type"),
             "speaker_last_error": self._player.get("speaker_last_error"),

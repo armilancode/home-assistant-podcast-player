@@ -101,6 +101,15 @@ def _public_feed(feed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _public_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Return frontend-safe settings without internal proxy secrets."""
+    return {
+        key: value
+        for key, value in settings.items()
+        if key != "speaker_proxy_secret"
+    }
+
+
 def _audio_proxy_response_headers(upstream_headers: Any, fallback_content_type: str) -> dict[str, str]:
     """Return safe audio response headers copied from an upstream response."""
     response_headers = {}
@@ -143,6 +152,11 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
     states = getattr(hass, "states", None)
     if states is None:
         return targets
+    try:
+        runtime = get_runtime(hass)
+    except Exception:  # noqa: BLE001
+        runtime = None
+    enhanced_dlna_controls = bool(runtime.storage.data["settings"].get("enhanced_dlna_controls", True)) if runtime else False
 
     for state in states.async_all("media_player"):
         entity_id = state.entity_id
@@ -160,8 +174,14 @@ def _public_output_targets(hass: HomeAssistant) -> list[dict[str, Any]]:
 
         entry = registry.async_get(entity_id) if registry is not None else None
         platform = getattr(entry, "platform", None) if entry else None
-        features = int(attrs.get("supported_features") or 0)
-        status = output_target_status(entity_id, state, platform)
+        features = int(attrs.get("supported_features") or getattr(entry, "supported_features", 0) or 0)
+        status = output_target_status(
+            entity_id,
+            state,
+            platform,
+            supported_features=features,
+            enhanced_dlna_controls=enhanced_dlna_controls,
+        )
 
         targets.append(
             {
@@ -293,7 +313,7 @@ async def websocket_get_library(hass: HomeAssistant, connection: websocket_api.A
             "episodes": public_episodes,
             "player": storage.data["player"],
             "counts": storage.counts(),
-            "settings": storage.data["settings"],
+            "settings": _public_settings(storage.data["settings"]),
             "output_targets": _public_output_targets(hass),
         },
     )

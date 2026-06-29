@@ -26,8 +26,13 @@ def _media_player_features() -> Any:
     return MediaPlayerEntityFeature
 
 
-def _supported_features(state: Any) -> int:
+def _supported_features(state: Any, supported_features: int | None = None) -> int:
     """Return supported media-player feature bitmask from a state object."""
+    if supported_features is not None:
+        try:
+            return int(supported_features or 0)
+        except (TypeError, ValueError):
+            return 0
     attrs = dict(getattr(state, "attributes", {}) or {})
     try:
         return int(attrs.get("supported_features") or 0)
@@ -46,7 +51,13 @@ def is_external_media_player_entity_id(entity_id: str) -> bool:
     return entity_id.startswith("media_player.") and entity_id != PLAYER_ENTITY_ID
 
 
-def output_target_status(entity_id: str, state: Any | None, platform: str | None = None) -> dict[str, Any]:
+def output_target_status(
+    entity_id: str,
+    state: Any | None,
+    platform: str | None = None,
+    supported_features: int | None = None,
+    enhanced_dlna_controls: bool = False,
+) -> dict[str, Any]:
     """Return frontend-safe output status and capabilities for a media player."""
     name = target_name(entity_id, state)
     if not is_external_media_player_entity_id(entity_id):
@@ -101,7 +112,7 @@ def output_target_status(entity_id: str, state: Any | None, platform: str | None
 
     attrs = dict(getattr(state, "attributes", {}) or {})
     state_value = str(getattr(state, "state", None) or "unknown")
-    features = _supported_features(state)
+    features = _supported_features(state, supported_features)
     feature_enum = _media_player_features()
     can_seek = False
     can_pause = False
@@ -114,8 +125,14 @@ def output_target_status(entity_id: str, state: Any | None, platform: str | None
         can_play_media = _feature_enabled(features, getattr(feature_enum, "PLAY_MEDIA", 0)) if features else True
 
     live_state = state_value not in UNAVAILABLE_MEDIA_PLAYER_STATES
-    progress = live_state and any(k in attrs for k in ("media_position", "media_duration", "media_position_updated_at"))
     is_dlna = platform == "dlna_dmr"
+    ha_progress = live_state and (
+        attrs.get("media_position") is not None
+        or attrs.get("media_position_updated_at") is not None
+        or bool(attrs.get("media_duration"))
+    )
+    enhanced_dlna = bool(enhanced_dlna_controls and is_dlna and live_state)
+    progress = bool(ha_progress or enhanced_dlna)
     status = "ready"
     status_label = "Ready"
     reason = None
@@ -137,10 +154,13 @@ def output_target_status(entity_id: str, state: Any | None, platform: str | None
         reason = f"{name} does not support Home Assistant play_media."
         playable = False
 
-    limited = not playable or (is_dlna and not progress)
+    seek_mode = "supported" if can_seek and ha_progress else "best_effort" if enhanced_dlna else "none"
+    pause_mode = "supported" if can_pause and live_state else "best_effort" if enhanced_dlna else "none"
+    stop_mode = "supported" if can_stop and live_state else "best_effort" if enhanced_dlna else "none"
+    limited = not playable or (is_dlna and not progress and not enhanced_dlna)
     notes = [
-        "Reports live progress" if progress else "Does not report live progress",
-        "DLNA controls use Home Assistant media_player services" if is_dlna else "Generic HA media player",
+        "Reports live progress" if ha_progress else "Progress can use enhanced DLNA" if enhanced_dlna else "Does not report live progress",
+        "Enhanced DLNA controls available" if enhanced_dlna else "DLNA controls use Home Assistant media_player services" if is_dlna else "Generic HA media player",
     ]
     if reason:
         notes.insert(0, reason)
@@ -158,13 +178,13 @@ def output_target_status(entity_id: str, state: Any | None, platform: str | None
             "play_media": bool(can_play_media),
             "live_state": bool(live_state),
             "progress": bool(progress),
-            "seek": "supported" if can_seek and progress else "none",
-            "pause": "supported" if can_pause and live_state else "none",
-            "stop": "supported" if can_stop and live_state else "none",
+            "seek": seek_mode,
+            "pause": pause_mode,
+            "stop": stop_mode,
             "speed": False,
             "artwork": "metadata",
             "limited_controls": bool(limited),
-            "raw_avtransport": False,
+            "raw_avtransport": bool(enhanced_dlna),
         },
         "notes": notes,
     }

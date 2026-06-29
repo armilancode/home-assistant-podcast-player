@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -26,9 +27,14 @@ from .const import (
     EVENT_PLAYBACK_STARTED,
     USER_AGENT,
 )
+from .external_control import (
+    DlnaAvTransportController,
+    ExternalPlaybackStatus,
+    current_media_matches_session,
+)
 from .feed_parser import PodcastParseError, parse_podcast_feed
 from .speaker_proxy import make_signed_speaker_artwork_proxy_url, make_signed_speaker_proxy_url
-from .storage import PodcastStorage, make_feed_id, normalize_rss_url, utcnow_iso
+from .storage import PodcastStorage, default_external_session, make_feed_id, normalize_rss_url, stable_hash, utcnow_iso
 from .targets import UNAVAILABLE_MEDIA_PLAYER_STATES, is_external_media_player_entity_id, output_target_status
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,6 +43,7 @@ MAX_FEED_BODY_BYTES = 10 * 1024 * 1024
 FEED_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=20)
 MAX_PARALLEL_REFRESHES = 4
 ACTIVE_MEDIA_PLAYER_STATES = {"playing", "paused", "buffering"}
+EXTERNAL_POLL_SECONDS = 5
 
 
 def refresh_interval_from_settings(settings: dict[str, Any]) -> timedelta:
@@ -73,10 +80,45 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._session = async_get_clientsession(hass)
         self._refresh_lock = asyncio.Lock()
         self._refresh_sem = asyncio.Semaphore(MAX_PARALLEL_REFRESHES)
+        self._external_control = DlnaAvTransportController()
+        self._external_poll_task: asyncio.Task[None] | None = None
 
     async def async_initialize(self) -> None:
         """Initialize coordinator data without forcing a network refresh."""
         self.async_set_updated_data(self.storage.snapshot())
+        self._ensure_external_polling()
+
+    async def async_shutdown(self) -> None:
+        """Stop background tasks owned by the coordinator."""
+        if self._external_poll_task and not self._external_poll_task.done():
+            self._external_poll_task.cancel()
+            try:
+                await self._external_poll_task
+            except asyncio.CancelledError:
+                pass
+        self._external_poll_task = None
+
+    def _ensure_external_polling(self) -> None:
+        """Ensure external session polling runs when HA can schedule tasks."""
+        if self._external_poll_task and not self._external_poll_task.done():
+            return
+        session = self._external_session()
+        if not session.get("active"):
+            return
+        create_task = getattr(self.hass, "async_create_task", None)
+        if create_task is None:
+            return
+        self._external_poll_task = create_task(self._async_external_poll_loop())
+
+    async def _async_external_poll_loop(self) -> None:
+        """Poll active external playback sessions."""
+        try:
+            while self._external_session().get("active"):
+                await asyncio.sleep(EXTERNAL_POLL_SECONDS)
+                if self._external_session().get("active"):
+                    await self.async_update_external_session()
+        finally:
+            self._external_poll_task = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Periodic refresh all feeds."""
@@ -203,6 +245,277 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 },
             )
 
+    def _external_session(self) -> dict[str, Any]:
+        """Return the current external playback session, adding missing defaults."""
+        player = self.storage.data["player"]
+        session = player.get("external_session")
+        if not isinstance(session, dict):
+            session = default_external_session()
+            player["external_session"] = session
+            return session
+        defaults = default_external_session()
+        defaults.update(session)
+        player["external_session"] = defaults
+        return defaults
+
+    def _enhanced_dlna_controls_enabled(self) -> bool:
+        """Return whether enhanced DLNA controls are enabled."""
+        return bool(self.storage.data["settings"].get("enhanced_dlna_controls", True))
+
+    def _target_registry_info(self, entity_id: str) -> dict[str, Any]:
+        """Return generic registry/config-entry information for a media player."""
+        attrs = dict(getattr(self.hass.states.get(entity_id), "attributes", {}) or {})
+        info: dict[str, Any] = {
+            "platform": None,
+            "supported_features": attrs.get("supported_features"),
+            "description_url": None,
+        }
+        try:
+            from homeassistant.helpers import entity_registry as er
+
+            registry = er.async_get(self.hass)
+            entry = registry.async_get(entity_id)
+        except Exception:  # noqa: BLE001
+            entry = None
+
+        if entry is not None:
+            info["platform"] = getattr(entry, "platform", None)
+            info["supported_features"] = attrs.get("supported_features") or getattr(entry, "supported_features", 0)
+            config_entry_id = getattr(entry, "config_entry_id", None)
+            if info["platform"] == "dlna_dmr" and config_entry_id:
+                try:
+                    config_entry = self.hass.config_entries.async_get_entry(config_entry_id)
+                    data = getattr(config_entry, "data", {}) or {}
+                    info["description_url"] = data.get("url")
+                except Exception:  # noqa: BLE001
+                    info["description_url"] = None
+        return info
+
+    def _target_status(self, entity_id: str, state: Any | None = None) -> dict[str, Any]:
+        """Return target status using HA state plus registry-supported features."""
+        state = state if state is not None else self.hass.states.get(entity_id)
+        info = self._target_registry_info(entity_id)
+        return output_target_status(
+            entity_id,
+            state,
+            info.get("platform"),
+            supported_features=info.get("supported_features"),
+            enhanced_dlna_controls=self._enhanced_dlna_controls_enabled(),
+        )
+
+    def _set_external_session(
+        self,
+        *,
+        episode_id: str,
+        target: str,
+        target_name: str,
+        target_platform: str | None,
+        media_content_id: str,
+        resume_position: int,
+        duration: int | None,
+    ) -> dict[str, Any]:
+        """Create/update the backend-owned external playback session."""
+        now = utcnow_iso()
+        session = default_external_session()
+        session.update(
+            {
+                "active": True,
+                "session_id": uuid4().hex,
+                "episode_id": episode_id,
+                "target_media_player": target,
+                "target_media_player_name": target_name,
+                "target_platform": target_platform,
+                "started_at": now,
+                "updated_at": now,
+                "resume_position": int(resume_position or 0),
+                "position": int(resume_position or 0),
+                "duration": duration,
+                "transport_state": "playing",
+                "supported_actions": [],
+                "control_source": "ha",
+                "progress_source": "saved" if resume_position else "unavailable",
+                "status_updated_at": now,
+                "media_content_id_hash": stable_hash(media_content_id, 32),
+                "media_matches_session": True,
+                "last_error": None,
+            }
+        )
+        self.storage.data["player"]["external_session"] = session
+        return session
+
+    def _clear_external_session(self, reason: str | None = None) -> None:
+        """Mark the external session inactive without leaking implementation data."""
+        existing = self._external_session()
+        ended = default_external_session()
+        for key in (
+            "session_id",
+            "episode_id",
+            "target_media_player",
+            "target_media_player_name",
+            "target_platform",
+            "started_at",
+            "position",
+            "duration",
+            "control_source",
+            "progress_source",
+            "media_content_id_hash",
+            "media_matches_session",
+        ):
+            ended[key] = existing.get(key)
+        ended["active"] = False
+        ended["transport_state"] = "idle"
+        ended["ended_at"] = utcnow_iso()
+        ended["updated_at"] = ended["ended_at"]
+        ended["status_updated_at"] = ended["ended_at"]
+        ended["last_error"] = reason
+        ended["supported_actions"] = existing.get("supported_actions") or []
+        self.storage.data["player"]["external_session"] = ended
+
+    def _expected_media_id_for_session(self, session: dict[str, Any]) -> str | None:
+        """Return the expected direct episode URL for safe-stop matching."""
+        episode_id = session.get("episode_id")
+        episode = self.storage.get_episode(episode_id) if episode_id else None
+        return episode.get("audio_url") if episode else None
+
+    def _apply_external_status(self, status: ExternalPlaybackStatus) -> None:
+        """Persist external target status/progress."""
+        player = self.storage.data["player"]
+        session = self._external_session()
+        episode_id = session.get("episode_id") or player.get("current_episode_id")
+        if not episode_id:
+            return
+
+        now = utcnow_iso()
+        duration = status.duration or session.get("duration") or player.get("duration")
+        position = status.position if status.position is not None else session.get("position") or player.get("position") or 0
+        session.update(
+            {
+                "position": int(position or 0),
+                "duration": duration,
+                "transport_state": status.transport_state or status.state,
+                "supported_actions": sorted(status.supported_actions or []),
+                "control_source": status.control_source,
+                "progress_source": status.progress_source,
+                "status_updated_at": now,
+                "updated_at": now,
+                "last_error": None,
+            }
+        )
+        media_match = current_media_matches_session(
+            status.current_media_id,
+            self._expected_media_id_for_session(session),
+            episode_id,
+        )
+        if media_match is not None:
+            session["media_matches_session"] = media_match
+
+        if status.state in {"playing", "paused"}:
+            self.storage.save_progress(
+                episode_id,
+                int(position or 0),
+                duration,
+                playing=status.state == "playing",
+                speed=player.get("speed"),
+            )
+            player["output_mode"] = "speaker"
+            player["target_media_player"] = session.get("target_media_player")
+            player["target_media_player_name"] = session.get("target_media_player_name")
+        elif status.state == "idle":
+            self.storage.save_progress(episode_id, int(position or 0), duration, playing=False, speed=player.get("speed"))
+            self.storage.set_player_state("idle")
+            self._set_browser_output(player)
+            self._clear_external_session()
+
+    def _ha_status_for_target(self, target: str) -> ExternalPlaybackStatus | None:
+        """Build an external status snapshot from HA media_player attributes."""
+        state = self.hass.states.get(target)
+        if state is None:
+            return None
+        attrs = dict(getattr(state, "attributes", {}) or {})
+        state_value = str(getattr(state, "state", "") or "")
+        progress_available = (
+            attrs.get("media_position") is not None
+            or attrs.get("media_position_updated_at") is not None
+            or bool(attrs.get("media_duration"))
+        )
+        if state_value not in ACTIVE_MEDIA_PLAYER_STATES and state_value != "idle":
+            return None
+        position: float | int | None = attrs.get("media_position")
+        if position is not None and state_value == "playing" and attrs.get("media_position_updated_at"):
+            try:
+                updated = datetime.fromisoformat(str(attrs["media_position_updated_at"])).astimezone(timezone.utc)
+                position = float(position) + max(0, (datetime.now(timezone.utc) - updated).total_seconds())
+            except (TypeError, ValueError):
+                pass
+        return ExternalPlaybackStatus(
+            state="idle" if state_value == "idle" else state_value,
+            transport_state=state_value,
+            position=int(position) if position is not None else None,
+            duration=int(attrs["media_duration"]) if attrs.get("media_duration") else None,
+            current_media_id=attrs.get("media_content_id"),
+            supported_actions=None,
+            progress_source="ha" if progress_available else "unavailable",
+            control_source="ha",
+        )
+
+    def _estimated_external_status(self) -> ExternalPlaybackStatus | None:
+        """Return estimated progress for active targets that expose no live progress."""
+        player = self.storage.data["player"]
+        session = self._external_session()
+        if not session.get("active") or player.get("state") != "playing":
+            return None
+        try:
+            updated_raw = session.get("status_updated_at") or player.get("updated_at")
+            updated = datetime.fromisoformat(str(updated_raw)).astimezone(timezone.utc)
+            elapsed = max(0, (datetime.now(timezone.utc) - updated).total_seconds())
+        except (TypeError, ValueError):
+            elapsed = 0
+        speed = float(player.get("speed") or 1.0)
+        position = int(float(session.get("position") or player.get("position") or 0) + elapsed * speed)
+        duration = session.get("duration") or player.get("duration")
+        if duration:
+            position = min(position, int(duration))
+        return ExternalPlaybackStatus(
+            state="playing",
+            transport_state="estimated",
+            position=position,
+            duration=duration,
+            supported_actions=set(session.get("supported_actions") or []),
+            progress_source="estimated",
+            control_source=str(session.get("control_source") or "ha"),
+        )
+
+    async def _async_dlna_status(self, target: str) -> ExternalPlaybackStatus | None:
+        """Read status directly from a DLNA DMR target when available."""
+        description_url = self._dlna_description_url(target)
+        if not description_url:
+            return None
+        try:
+            return await self._external_control.async_status(description_url)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Podcast Player enhanced DLNA status failed target=%s: %s", target, err)
+            return None
+
+    async def async_update_external_session(self) -> None:
+        """Poll and persist active external playback status."""
+        session = self._external_session()
+        target = session.get("target_media_player")
+        if not session.get("active") or not target:
+            return
+
+        dlna_status = await self._async_dlna_status(str(target))
+        status = dlna_status if dlna_status is not None and dlna_status.state != "unknown" else None
+        ha_status = self._ha_status_for_target(str(target))
+        if status is None and ha_status is not None and (ha_status.progress_source == "ha" or ha_status.state == "idle"):
+            status = ha_status
+        if status is None:
+            status = self._estimated_external_status()
+        if status is None:
+            return
+        self._apply_external_status(status)
+        await self.storage.async_save()
+        self.async_set_updated_data(self.storage.snapshot())
+
     async def async_play_episode(self, episode_id: str) -> None:
         """Set current episode and state to browser playback.
 
@@ -212,7 +525,12 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.storage.get_episode(episode_id):
             raise ValueError("Unknown episode_id")
         player = self.storage.data["player"]
-        previous_target = player.get("target_media_player") if player.get("output_mode") == "speaker" else None
+        session = self._external_session()
+        previous_target = (
+            player.get("target_media_player")
+            if player.get("output_mode") == "speaker"
+            else session.get("target_media_player") if session.get("active") else None
+        )
         if previous_target:
             try:
                 await self.async_stop_media_player(previous_target)
@@ -233,6 +551,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         episode_id = player.get("current_episode_id")
         if player.get("output_mode") == "speaker" and player.get("target_media_player"):
             target = str(player.get("target_media_player"))
+            paused = False
             try:
                 self._validate_media_player_control_target(target, "pause")
                 await self.hass.services.async_call(
@@ -241,23 +560,35 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {"entity_id": target},
                     blocking=True,
                 )
+                paused = True
             except HomeAssistantError as err:
-                await self._handle_active_target_control_error(target, err)
-                raise
+                if not await self._async_pause_via_dlna(target):
+                    await self._handle_active_target_control_error(target, err)
+                    raise
             except Exception as err:  # noqa: BLE001
-                message = f"Target media player rejected pause: {err}"
-                await self._store_speaker_error(message)
-                raise HomeAssistantError(message) from err
+                if not await self._async_pause_via_dlna(target):
+                    message = f"Target media player rejected pause: {err}"
+                    await self._store_speaker_error(message)
+                    raise HomeAssistantError(message) from err
+            if paused:
+                self._external_session()["control_source"] = "ha"
         self.storage.set_player_state("paused")
+        if player.get("output_mode") == "speaker":
+            self._external_session()["transport_state"] = "paused"
+            self._external_session()["updated_at"] = utcnow_iso()
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
         self.hass.bus.async_fire(EVENT_PLAYBACK_PAUSED, {"episode_id": episode_id})
 
-    async def async_stop(self) -> None:
+    async def async_stop(self, force: bool = False) -> None:
         """Stop playback or target speaker when applicable."""
         player = self.storage.data["player"]
-        if player.get("output_mode") == "speaker" and player.get("target_media_player"):
-            await self.async_stop_media_player(player.get("target_media_player"))
+        session = self._external_session()
+        target = player.get("target_media_player") if player.get("output_mode") == "speaker" else None
+        if not target and session.get("active"):
+            target = session.get("target_media_player")
+        if target:
+            await self.async_stop_media_player(str(target), force=force)
             return
         self.storage.set_player_state("idle")
         self._set_browser_output(self.storage.data["player"])
@@ -295,12 +626,19 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             target = str(player.get("target_media_player"))
             seek_sent = await self._async_seek_media_player(target, float(position))
+            if not seek_sent:
+                seek_sent = await self._async_seek_via_dlna(target, float(position))
             if not seek_sent and self._target_is_unavailable_or_missing(target):
                 await self._clear_active_speaker_target(
                     target,
                     f"Target media player is not available for seek: {target}",
                 )
                 player = self.storage.data["player"]
+            elif seek_sent:
+                session = self._external_session()
+                session["position"] = int(float(position or 0))
+                session["progress_source"] = "dlna" if session.get("control_source") == "dlna" else session.get("progress_source")
+                session["updated_at"] = utcnow_iso()
         self.storage.save_progress(episode_id, position, playing=player.get("state") == "playing")
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -350,6 +688,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target = str(player.get("target_media_player"))
             if not episode_id:
                 raise HomeAssistantError("No podcast episode available to resume")
+            resumed = False
             try:
                 self._validate_media_player_control_target(target, "resume")
                 await self.hass.services.async_call(
@@ -358,16 +697,25 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {"entity_id": target},
                     blocking=True,
                 )
+                resumed = True
             except HomeAssistantError as err:
-                await self._handle_active_target_control_error(target, err)
-                raise
+                if not await self._async_play_via_dlna(target):
+                    await self._handle_active_target_control_error(target, err)
+                    raise
             except Exception as err:  # noqa: BLE001
-                message = f"Target media player rejected resume: {err}"
-                await self._store_speaker_error(message)
-                raise HomeAssistantError(message) from err
+                if not await self._async_play_via_dlna(target):
+                    message = f"Target media player rejected resume: {err}"
+                    await self._store_speaker_error(message)
+                    raise HomeAssistantError(message) from err
+            if resumed:
+                self._external_session()["control_source"] = "ha"
             self.storage.set_player_state("playing", episode_id)
+            session = self._external_session()
+            session["transport_state"] = "playing"
+            session["updated_at"] = utcnow_iso()
             await self.storage.async_save()
             self.async_set_updated_data(self.storage.snapshot())
+            self._ensure_external_polling()
             return
 
         if episode_id:
@@ -443,6 +791,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> dict[str, Any] | None:
         """Send an episode to a real HA media_player entity/speaker."""
         target_state = self._validate_media_player_output_target(media_player_entity_id)
+        target_info = self._target_registry_info(media_player_entity_id)
+        player = self.storage.data["player"]
+        previous_target = player.get("target_media_player") if player.get("output_mode") == "speaker" else None
+        if previous_target and previous_target != media_player_entity_id:
+            await self.async_stop_media_player(str(previous_target))
 
         episode = self._select_episode_for_output(episode_id, feed_id, episode_mode, feed_ids=feed_ids)
         if not episode:
@@ -531,13 +884,14 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         resume_seconds,
                     )
                 except Exception as seek_err:  # noqa: BLE001
-                    _LOGGER.debug(
-                        "Podcast Player media_seek not supported/failed target=%s episode=%s position=%s: %s",
-                        media_player_entity_id,
-                        episode_id,
-                        resume_seconds,
-                        seek_err,
-                    )
+                    if not await self._async_seek_via_dlna(media_player_entity_id, float(resume_seconds)):
+                        _LOGGER.debug(
+                            "Podcast Player media_seek not supported/failed target=%s episode=%s position=%s: %s",
+                            media_player_entity_id,
+                            episode_id,
+                            resume_seconds,
+                            seek_err,
+                        )
         except Exception as err:  # noqa: BLE001
             self.storage.data["player"]["speaker_last_error"] = str(err)
             await self.storage.async_save()
@@ -560,8 +914,18 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         player["speaker_url_mode"] = url_mode
         player["speaker_media_content_type"] = media_content_type
         player["speaker_last_error"] = None
+        self._set_external_session(
+            episode_id=episode_id,
+            target=media_player_entity_id,
+            target_name=target_state.name,
+            target_platform=target_info.get("platform"),
+            media_content_id=url,
+            resume_position=resume_seconds,
+            duration=self.storage.get_progress(episode_id).get("duration") or episode.get("duration_seconds"),
+        )
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
+        self._ensure_external_polling()
         self.hass.bus.async_fire(
             EVENT_PLAYBACK_STARTED,
             {
@@ -573,10 +937,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return episode
 
-    async def async_stop_media_player(self, media_player_entity_id: str | None = None) -> None:
+    async def async_stop_media_player(self, media_player_entity_id: str | None = None, force: bool = False) -> None:
         """Stop a target media player used for podcast speaker output."""
         player = self.storage.data["player"]
-        target = media_player_entity_id or player.get("target_media_player") or player.get("last_target_media_player")
+        session = self._external_session()
+        target = media_player_entity_id or session.get("target_media_player") or player.get("target_media_player") or player.get("last_target_media_player")
         if not target:
             _LOGGER.warning("Podcast Player stop requested, but no target media player is known")
             return
@@ -603,36 +968,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         state_value = str(state.state) if state is not None else None
         target_is_active = state_value in ACTIVE_MEDIA_PLAYER_STATES
-        if state is None or not target_is_active:
-            message = f"Target media player is not available for stopping: {target}"
-            errors.append(message)
-            stopped = True
-            _LOGGER.info(
-                "Podcast Player clearing inactive target=%s state=%r active_target=%s",
-                target,
-                state_value,
-                target == player.get("target_media_player"),
-            )
-        if not stopped:
-            target_status = output_target_status(target, state)
-            if target_status["capabilities"].get("stop") != "supported":
-                message = f"Target media player does not support stop: {target}"
-                errors.append(message)
-                if target == player.get("target_media_player"):
-                    stopped = True
-                    _LOGGER.info(
-                        "Podcast Player clearing active target without media_stop target=%s state=%r",
-                        target,
-                        state_value,
-                    )
-                else:
-                    player["last_target_media_player"] = target
-                    player["last_target_media_player_name"] = target_name
-                    player["speaker_last_error"] = "; ".join(errors)
-                    await self.storage.async_save()
-                    self.async_set_updated_data(self.storage.snapshot())
-                    raise HomeAssistantError(message)
-        if not stopped:
+        target_status = self._target_status(target, state)
+        stop_mode = str(target_status["capabilities"].get("stop") or "none")
+        if target_is_active and stop_mode not in {"supported", "best_effort"}:
+            errors.append(f"Target media player does not support stop: {target}")
+        if target_is_active and stop_mode == "supported":
             try:
                 await self.hass.services.async_call(
                     "media_player",
@@ -646,19 +986,42 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 errors.append(f"HA media_stop failed: {err}")
                 _LOGGER.warning("Podcast Player HA media_stop failed for %s: %s", target, err)
 
+        if not stopped:
+            try:
+                stopped = await self._async_stop_via_dlna(target, force=force)
+            except HomeAssistantError as err:
+                errors.append(str(err))
+                player["last_target_media_player"] = target
+                player["last_target_media_player_name"] = target_name
+                player["speaker_last_error"] = "; ".join(errors)
+                self._external_session()["last_error"] = player["speaker_last_error"]
+                await self.storage.async_save()
+                self.async_set_updated_data(self.storage.snapshot())
+                raise
+            except Exception as err:  # noqa: BLE001
+                errors.append(f"Enhanced DLNA stop failed: {err}")
+                _LOGGER.debug("Podcast Player enhanced DLNA stop failed for %s: %s", target, err)
+
+        if not stopped and (state is None or not target_is_active):
+            dlna_status = await self._async_dlna_status(target)
+            if dlna_status is None or not dlna_status.is_active:
+                stopped = True
+                _LOGGER.info("Podcast Player clearing inactive target=%s state=%r", target, state_value)
+
         player["last_target_media_player"] = target
         player["last_target_media_player_name"] = target_name
         player["speaker_last_error"] = None if stopped else "; ".join(errors)
 
         if stopped:
             # Clear output only after a real stop path succeeded.
-            if target == player.get("target_media_player"):
+            if target == player.get("target_media_player") or target == session.get("target_media_player"):
                 self.storage.set_player_state("idle")
                 player["output_mode"] = "browser"
                 player["target_media_player"] = None
                 player["target_media_player_name"] = None
                 player["speaker_url_mode"] = None
                 player["speaker_media_content_type"] = None
+                self._clear_external_session()
             await self.storage.async_save()
             self.async_set_updated_data(self.storage.snapshot())
             return
@@ -667,12 +1030,96 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.async_set_updated_data(self.storage.snapshot())
         raise HomeAssistantError(player["speaker_last_error"] or f"Could not stop {target}")
 
+    def _dlna_description_url(self, target: str) -> str | None:
+        """Return a DLNA DMR description URL for a target when available."""
+        if not self._enhanced_dlna_controls_enabled():
+            return None
+        info = self._target_registry_info(target)
+        if info.get("platform") != "dlna_dmr":
+            return None
+        description_url = info.get("description_url")
+        return str(description_url) if description_url else None
+
+    async def _async_stop_via_dlna(self, target: str, *, force: bool = False) -> bool:
+        """Stop a DLNA target through AVTransport when safe and available."""
+        description_url = self._dlna_description_url(target)
+        if not description_url:
+            return False
+
+        status = await self._external_control.async_status(description_url)
+        session = self._external_session()
+        if not status.is_active:
+            return True
+        if status.supported_actions and "Stop" not in status.supported_actions:
+            return False
+
+        media_match = current_media_matches_session(
+            status.current_media_id,
+            self._expected_media_id_for_session(session),
+            session.get("episode_id"),
+        )
+        if media_match is False and not force:
+            raise HomeAssistantError("Target is no longer playing this podcast session. Use force stop to stop it anyway.")
+        if media_match is not None:
+            session["media_matches_session"] = media_match
+
+        await self._external_control.async_stop(description_url)
+        session["control_source"] = "dlna"
+        session["supported_actions"] = sorted(status.supported_actions or [])
+        return True
+
+    async def _async_pause_via_dlna(self, target: str) -> bool:
+        """Pause a DLNA target through AVTransport when available."""
+        description_url = self._dlna_description_url(target)
+        if not description_url:
+            return False
+        try:
+            status = await self._external_control.async_status(description_url)
+            if status.supported_actions and "Pause" not in status.supported_actions:
+                return False
+            await self._external_control.async_pause(description_url)
+        except Exception:  # noqa: BLE001
+            return False
+        session = self._external_session()
+        session["control_source"] = "dlna"
+        session["supported_actions"] = sorted(status.supported_actions or [])
+        return True
+
+    async def _async_play_via_dlna(self, target: str) -> bool:
+        """Resume a DLNA target through AVTransport when available."""
+        description_url = self._dlna_description_url(target)
+        if not description_url:
+            return False
+        try:
+            await self._external_control.async_play(description_url)
+        except Exception:  # noqa: BLE001
+            return False
+        self._external_session()["control_source"] = "dlna"
+        return True
+
+    async def _async_seek_via_dlna(self, target: str, position: float) -> bool:
+        """Seek a DLNA target through AVTransport when available."""
+        description_url = self._dlna_description_url(target)
+        if not description_url:
+            return False
+        try:
+            status = await self._external_control.async_status(description_url)
+            if status.supported_actions and "Seek" not in status.supported_actions:
+                return False
+            await self._external_control.async_seek(description_url, position)
+        except Exception:  # noqa: BLE001
+            return False
+        session = self._external_session()
+        session["control_source"] = "dlna"
+        session["supported_actions"] = sorted(status.supported_actions or [])
+        return True
+
     def _validate_media_player_output_target(self, entity_id: str) -> Any:
         """Validate that a media_player target is safe to use for podcast output."""
         if not self._is_external_media_player_entity_id(entity_id):
             raise HomeAssistantError("Target must be an external media_player entity")
         target_state = self.hass.states.get(entity_id)
-        status = output_target_status(entity_id, target_state)
+        status = self._target_status(entity_id, target_state)
         if not status["playable"]:
             raise HomeAssistantError(str(status["reason"] or f"Target media player is not available: {entity_id}"))
         return target_state
@@ -759,6 +1206,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         player["speaker_url_mode"] = None
         player["speaker_media_content_type"] = None
         player["speaker_last_error"] = None
+        self._clear_external_session()
 
     def active_feed_ids(self) -> set[str]:
         """Return active/enabled feed IDs."""

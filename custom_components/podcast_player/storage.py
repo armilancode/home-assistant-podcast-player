@@ -66,6 +66,32 @@ def make_episode_id(feed_id: str, guid: str | None, audio_url: str | None, title
     return f"ep_{stable_hash(key, 32)}"
 
 
+def default_external_session() -> dict[str, Any]:
+    """Return a new default external playback session."""
+    return {
+        "active": False,
+        "session_id": None,
+        "episode_id": None,
+        "target_media_player": None,
+        "target_media_player_name": None,
+        "target_platform": None,
+        "started_at": None,
+        "updated_at": None,
+        "ended_at": None,
+        "resume_position": 0,
+        "position": 0,
+        "duration": None,
+        "transport_state": None,
+        "supported_actions": [],
+        "control_source": None,
+        "progress_source": None,
+        "status_updated_at": None,
+        "media_content_id_hash": None,
+        "media_matches_session": None,
+        "last_error": None,
+    }
+
+
 def default_data() -> dict[str, Any]:
     """Return a new default storage document."""
     return {
@@ -76,6 +102,7 @@ def default_data() -> dict[str, Any]:
             "played_threshold": DEFAULT_PLAYED_THRESHOLD,
             "max_episodes_per_feed": DEFAULT_MAX_EPISODES_PER_FEED,
             "direct_first": True,
+            "enhanced_dlna_controls": True,
             "speaker_proxy_secret": None,
         },
         "feeds": {},
@@ -92,9 +119,12 @@ def default_data() -> dict[str, Any]:
             "output_mode": "browser",
             "target_media_player": None,
             "target_media_player_name": None,
+            "last_target_media_player": None,
+            "last_target_media_player_name": None,
             "speaker_url_mode": None,
             "speaker_media_content_type": None,
             "speaker_last_error": None,
+            "external_session": default_external_session(),
         },
         "ui": {
             "selected_feed_id": "all",
@@ -131,6 +161,12 @@ class PodcastStorage:
             existing = stored.get(section) or {}
             if isinstance(existing, dict):
                 base.update(existing)
+                if section == "player":
+                    external_session = default_external_session()
+                    stored_session = existing.get("external_session")
+                    if isinstance(stored_session, dict):
+                        external_session.update(stored_session)
+                    base["external_session"] = external_session
             merged[section] = base
 
         for section in ("feeds", "episodes", "progress"):

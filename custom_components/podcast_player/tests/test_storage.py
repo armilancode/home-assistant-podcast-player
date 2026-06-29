@@ -1,6 +1,6 @@
 """Regression tests for Podcast Player storage."""
 
-from custom_components.podcast_player.storage import PodcastStorage, default_data
+from custom_components.podcast_player.storage import PodcastStorage, default_data, default_external_session
 
 
 def _episode(episode_id: str, published: str) -> dict:
@@ -33,3 +33,12 @@ def test_trimmed_known_episode_is_not_new_again() -> None:
     )
 
     assert newly_discovered == []
+
+
+def test_default_player_has_external_session() -> None:
+    """New storage documents include a backend-owned external session."""
+    data = default_data()
+
+    assert data["settings"]["enhanced_dlna_controls"] is True
+    assert data["player"]["external_session"] == default_external_session()
+    assert data["player"]["external_session"]["active"] is False

@@ -241,7 +241,14 @@ pause:
 stop:
   name: Stop podcast playback
   description: Stop the active Podcast Player output.
-  fields: {}
+  fields:
+    force:
+      required: false
+      default: false
+      selector:
+        boolean: {}
+      name: Force stop
+      description: Stop the external target even if it may no longer be playing this podcast session.
 
 stop_output:
   name: Stop podcast output
@@ -254,6 +261,13 @@ stop_output:
           domain: media_player
       name: Output media player
       description: Optional media player to stop. Leave empty to stop the current Podcast Player output.
+    force:
+      required: false
+      default: false
+      selector:
+        boolean: {}
+      name: Force stop
+      description: Stop the external target even if it may no longer be playing this podcast session.
 
 seek:
   name: Seek podcast episode
@@ -465,4 +479,11 @@ stop_media_player:
   target:
     entity:
       domain: media_player
-  fields: {}
+  fields:
+    force:
+      required: false
+      default: false
+      selector:
+        boolean: {}
+      name: Force stop
+      description: Stop the external target even if it may no longer be playing this podcast session.

@@ -16,6 +16,7 @@ from .const import (
     ALLOWED_SPEEDS,
     CONF_DEFAULT_PLAYBACK_SPEED,
     CONF_DIRECT_FIRST,
+    CONF_ENHANCED_DLNA_CONTROLS,
     CONF_INITIAL_RSS_URL,
     CONF_MAX_EPISODES_PER_FEED,
     CONF_NEW_FEED_URL,
@@ -54,6 +55,7 @@ def default_options() -> dict[str, Any]:
         CONF_DEFAULT_PLAYBACK_SPEED: DEFAULT_PLAYBACK_SPEED,
         CONF_PLAYED_THRESHOLD: DEFAULT_PLAYED_THRESHOLD,
         CONF_DIRECT_FIRST: True,
+        CONF_ENHANCED_DLNA_CONTROLS: True,
     }
 
 
@@ -87,6 +89,7 @@ def options_from_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_DEFAULT_PLAYBACK_SPEED: float(user_input[CONF_DEFAULT_PLAYBACK_SPEED]),
         CONF_PLAYED_THRESHOLD: float(user_input[CONF_PLAYED_THRESHOLD]),
         CONF_DIRECT_FIRST: user_input[CONF_URL_MODE_PREFERENCE] == URL_MODE_DIRECT,
+        CONF_ENHANCED_DLNA_CONTROLS: bool(user_input[CONF_ENHANCED_DLNA_CONTROLS]),
     }
 
 
@@ -123,6 +126,10 @@ def _settings_schema(options: dict[str, Any], *, include_initial_feed: bool = Fa
             CONF_URL_MODE_PREFERENCE,
             default=_url_mode_from_direct_first(bool(options[CONF_DIRECT_FIRST])),
         ): vol.In(URL_MODE_OPTIONS),
+        vol.Optional(
+            CONF_ENHANCED_DLNA_CONTROLS,
+            default=bool(options[CONF_ENHANCED_DLNA_CONTROLS]),
+        ): cv.boolean,
     }
 
     if include_initial_feed:

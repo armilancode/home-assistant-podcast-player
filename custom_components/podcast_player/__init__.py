@@ -99,7 +99,9 @@ SERVICE_SAVE_PROGRESS_SCHEMA = vol.Schema(
 SERVICE_STOP_MEDIA_PLAYER_SCHEMA = vol.Schema({
     vol.Optional("entity_id"): _SERVICE_TARGET_ENTITY,
     vol.Optional("media_player_entity_id"): cv.entity_id,
+    vol.Optional("force", default=False): cv.boolean,
 })
+SERVICE_STOP_SCHEMA = vol.Schema({vol.Optional("force", default=False): cv.boolean})
 SERVICE_MARK_EPISODE_SCHEMA = vol.Schema({vol.Required("episode_id"): cv.string})
 SERVICE_SET_SPEED_SCHEMA = vol.Schema({vol.Optional("entity_id"): _SERVICE_TARGET_ENTITY, vol.Required("speed"): vol.All(vol.Coerce(float), vol.In(ALLOWED_SPEEDS)), vol.Optional("episode_id"): cv.string})
 
@@ -161,6 +163,9 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    runtime = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if runtime is not None:
+        await runtime.coordinator.async_shutdown()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
@@ -428,7 +433,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def stop(call: ServiceCall) -> None:
         runtime = _runtime(hass)
-        await runtime.coordinator.async_stop()
+        await runtime.coordinator.async_stop(force=call.data.get("force", False))
 
     async def seek(call: ServiceCall) -> None:
         runtime = _runtime(hass)
@@ -483,15 +488,16 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def stop_media_player(call: ServiceCall) -> None:
         runtime = _runtime(hass)
-        await runtime.coordinator.async_stop_media_player(_media_player_entity_id_from_service(dict(call.data)))
+        data = dict(call.data)
+        await runtime.coordinator.async_stop_media_player(_media_player_entity_id_from_service(data), force=data.get("force", False))
 
     async def stop_output(call: ServiceCall) -> None:
         runtime = _runtime(hass)
         target = _media_player_entity_id_from_service(dict(call.data))
         if target:
-            await runtime.coordinator.async_stop_media_player(target)
+            await runtime.coordinator.async_stop_media_player(target, force=call.data.get("force", False))
         else:
-            await runtime.coordinator.async_stop()
+            await runtime.coordinator.async_stop(force=call.data.get("force", False))
 
     async def set_speed(call: ServiceCall) -> None:
         runtime = _runtime(hass)
@@ -507,7 +513,7 @@ def async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_PLAY_NEXT_UNPLAYED, play_next_unplayed, schema=SERVICE_OPTIONAL_FEED_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_RESUME, resume)
     hass.services.async_register(DOMAIN, SERVICE_PAUSE, pause)
-    hass.services.async_register(DOMAIN, SERVICE_STOP, stop)
+    hass.services.async_register(DOMAIN, SERVICE_STOP, stop, schema=SERVICE_STOP_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SEEK, seek, schema=SERVICE_SEEK_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SAVE_PROGRESS, save_progress, schema=SERVICE_SAVE_PROGRESS_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_MARK_PLAYED, mark_played, schema=SERVICE_MARK_EPISODE_SCHEMA)
