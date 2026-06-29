@@ -40,6 +40,17 @@ class FakeServices:
         self.calls.append((args, kwargs))
 
 
+class FakeBus:
+    """Minimal hass.bus replacement."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def async_fire(self, event_type: str, event_data: dict) -> None:
+        """Record fired events."""
+        self.events.append((event_type, event_data))
+
+
 class FakeStorage:
     """Minimal storage object."""
 
@@ -68,6 +79,18 @@ class FakeStorage:
             {"episode_id": episode_id, "played": False, "position": 0, "duration": None, "last_played_at": None},
         )
 
+    def get_episode(self, episode_id: str | None) -> dict | None:
+        """Return fake episode."""
+        if not episode_id:
+            return None
+        return self.data["episodes"].get(episode_id)
+
+    def get_feed(self, feed_id: str | None) -> dict | None:
+        """Return fake feed."""
+        if not feed_id:
+            return None
+        return self.data["feeds"].get(feed_id)
+
     def save_progress(self, episode_id: str, position: float, duration=None, playing=None, speed=None) -> dict:
         """Save fake progress."""
         progress = self.get_progress(episode_id)
@@ -79,7 +102,7 @@ class FakeStorage:
 def _coordinator(state: object | None) -> PodcastUpdateCoordinator:
     coord = PodcastUpdateCoordinator.__new__(PodcastUpdateCoordinator)
     coord.storage = FakeStorage()
-    coord.hass = SimpleNamespace(states=FakeStates(state), services=FakeServices())
+    coord.hass = SimpleNamespace(states=FakeStates(state), services=FakeServices(), bus=FakeBus())
     coord.async_set_updated_data = lambda data: None
     return coord
 
@@ -121,6 +144,50 @@ def test_playback_target_without_play_media_feature_fails_before_service_call() 
         coord._validate_media_player_output_target("media_player.limited")
 
     assert not coord.hass.services.called
+
+
+def test_playback_metadata_includes_dlna_artist_and_album_fields() -> None:
+    """Speaker playback sends podcast metadata in the HA DLNA-compatible metadata object."""
+    state = SimpleNamespace(state="idle", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["feeds"]["feed-1"] = {
+        "feed_id": "feed-1",
+        "title": "Example Podcast",
+        "description": "Example feed",
+    }
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "feed_id": "feed-1",
+        "title": "Example Episode",
+        "description": "Episode summary",
+        "published": "2026-06-29T10:00:00+00:00",
+        "audio_url": "https://example.test/episode.mp3",
+    }
+
+    asyncio.run(
+        coord.async_play_on_media_player(
+            "media_player.kitchen_speaker",
+            episode_id="episode-1",
+        )
+    )
+
+    args, kwargs = coord.hass.services.calls[0]
+    payload = args[2]
+    extra = payload["extra"]
+    metadata = extra["metadata"]
+
+    assert kwargs == {"blocking": True}
+    assert payload["media_content_id"] == "https://example.test/episode.mp3"
+    assert payload["media_content_type"] == "music"
+    assert extra["title"] == "Example Episode"
+    assert metadata["title"] == "Example Episode"
+    assert metadata["artist"] == "Example Podcast"
+    assert metadata["albumName"] == "Example Podcast"
+    assert metadata["creator"] == "Example Podcast"
+    assert metadata["publisher"] == "Example Podcast"
+    assert metadata["description"] == "Episode summary"
+    assert metadata["subtitle"] == "Episode summary"
+    assert metadata["releaseDate"] == "2026-06-29T10:00:00+00:00"
 
 
 def test_stop_unavailable_active_target_clears_without_service_call() -> None:

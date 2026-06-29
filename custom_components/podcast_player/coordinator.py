@@ -469,11 +469,27 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass, self.storage.data["settings"], episode_id
         ) if original_artwork else None
         artwork = proxied_artwork or original_artwork
+        description = episode.get("description") or feed.get("description")
+        published = episode.get("published")
+        metadata: dict[str, Any] = {
+            "title": title,
+            "artist": podcast_name,
+            "albumName": podcast_name,
+            "album": podcast_name,
+            "creator": podcast_name,
+            "publisher": podcast_name,
+        }
+        if description:
+            metadata["description"] = description
+            metadata["subtitle"] = description
+        if published:
+            metadata["releaseDate"] = published
         extra: dict[str, Any] = {
             "title": title,
             "artist": podcast_name,
             "album": podcast_name,
             "creator": podcast_name,
+            "metadata": metadata,
         }
         if artwork:
             extra["thumb"] = artwork
@@ -481,6 +497,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             extra["album_art"] = artwork
             extra["entity_picture"] = artwork
             extra["artwork_url"] = artwork
+            metadata["album_art_uri"] = artwork
             if original_artwork and original_artwork != artwork:
                 extra["original_artwork_url"] = original_artwork
         try:
