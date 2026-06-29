@@ -303,6 +303,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             enhanced_dlna_controls=self._enhanced_dlna_controls_enabled(),
         )
 
+    def _target_control_mode(self, entity_id: str, state: Any | None, capability: str) -> str:
+        """Return the advertised control mode for an external target."""
+        status = self._target_status(entity_id, state)
+        return str(status.get("capabilities", {}).get(capability) or "none")
+
     def _set_external_session(
         self,
         *,
@@ -552,17 +557,29 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if player.get("output_mode") == "speaker" and player.get("target_media_player"):
             target = str(player.get("target_media_player"))
             paused = False
+            tried_dlna = False
             try:
-                self._validate_media_player_control_target(target, "pause")
-                await self.hass.services.async_call(
-                    "media_player",
-                    "media_pause",
-                    {"entity_id": target},
-                    blocking=True,
-                )
-                paused = True
+                target_state = self._validate_media_player_control_target(target, "pause")
+                pause_mode = self._target_control_mode(target, target_state, "pause")
+                if pause_mode == "supported":
+                    await self.hass.services.async_call(
+                        "media_player",
+                        "media_pause",
+                        {"entity_id": target},
+                        blocking=True,
+                    )
+                    paused = True
+                elif pause_mode == "best_effort":
+                    tried_dlna = True
+                    paused = await self._async_pause_via_dlna(target)
+                    if not paused:
+                        raise HomeAssistantError(f"Target media player does not support pause: {target}")
+                else:
+                    raise HomeAssistantError(f"Target media player does not support pause: {target}")
             except HomeAssistantError as err:
-                if not await self._async_pause_via_dlna(target):
+                if not paused and not tried_dlna:
+                    paused = await self._async_pause_via_dlna(target)
+                if not paused:
                     await self._handle_active_target_control_error(target, err)
                     raise
             except Exception as err:  # noqa: BLE001
@@ -571,7 +588,8 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._store_speaker_error(message)
                     raise HomeAssistantError(message) from err
             if paused:
-                self._external_session()["control_source"] = "ha"
+                if self._external_session().get("control_source") != "dlna":
+                    self._external_session()["control_source"] = "ha"
         self.storage.set_player_state("paused")
         if player.get("output_mode") == "speaker":
             self._external_session()["transport_state"] = "paused"
@@ -689,17 +707,29 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not episode_id:
                 raise HomeAssistantError("No podcast episode available to resume")
             resumed = False
+            tried_dlna = False
             try:
-                self._validate_media_player_control_target(target, "resume")
-                await self.hass.services.async_call(
-                    "media_player",
-                    "media_play",
-                    {"entity_id": target},
-                    blocking=True,
-                )
-                resumed = True
+                target_state = self._validate_media_player_control_target(target, "resume")
+                resume_mode = self._target_control_mode(target, target_state, "resume")
+                if resume_mode == "supported":
+                    await self.hass.services.async_call(
+                        "media_player",
+                        "media_play",
+                        {"entity_id": target},
+                        blocking=True,
+                    )
+                    resumed = True
+                elif resume_mode == "best_effort":
+                    tried_dlna = True
+                    resumed = await self._async_play_via_dlna(target)
+                    if not resumed:
+                        raise HomeAssistantError(f"Target media player does not support resume: {target}")
+                else:
+                    raise HomeAssistantError(f"Target media player does not support resume: {target}")
             except HomeAssistantError as err:
-                if not await self._async_play_via_dlna(target):
+                if not resumed and not tried_dlna:
+                    resumed = await self._async_play_via_dlna(target)
+                if not resumed:
                     await self._handle_active_target_control_error(target, err)
                     raise
             except Exception as err:  # noqa: BLE001
@@ -708,7 +738,8 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._store_speaker_error(message)
                     raise HomeAssistantError(message) from err
             if resumed:
-                self._external_session()["control_source"] = "ha"
+                if self._external_session().get("control_source") != "dlna":
+                    self._external_session()["control_source"] = "ha"
             self.storage.set_player_state("playing", episode_id)
             session = self._external_session()
             session["transport_state"] = "playing"
@@ -1091,10 +1122,15 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not description_url:
             return False
         try:
+            status = await self._external_control.async_status(description_url)
+            if status.supported_actions and "Play" not in status.supported_actions:
+                return False
             await self._external_control.async_play(description_url)
         except Exception:  # noqa: BLE001
             return False
-        self._external_session()["control_source"] = "dlna"
+        session = self._external_session()
+        session["control_source"] = "dlna"
+        session["supported_actions"] = sorted(status.supported_actions or [])
         return True
 
     async def _async_seek_via_dlna(self, target: str, position: float) -> bool:

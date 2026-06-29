@@ -76,6 +76,7 @@ def output_target_status(
                 "progress": False,
                 "seek": "none",
                 "pause": "none",
+                "resume": "none",
                 "stop": "none",
                 "speed": False,
                 "artwork": "metadata",
@@ -101,6 +102,7 @@ def output_target_status(
                 "progress": False,
                 "seek": "none",
                 "pause": "none",
+                "resume": "none",
                 "stop": "none",
                 "speed": False,
                 "artwork": "metadata",
@@ -116,11 +118,13 @@ def output_target_status(
     feature_enum = _media_player_features()
     can_seek = False
     can_pause = False
+    can_play = False
     can_stop = False
     can_play_media = True
     if feature_enum is not None:
         can_seek = _feature_enabled(features, getattr(feature_enum, "SEEK", 0))
         can_pause = _feature_enabled(features, getattr(feature_enum, "PAUSE", 0))
+        can_play = _feature_enabled(features, getattr(feature_enum, "PLAY", 0))
         can_stop = _feature_enabled(features, getattr(feature_enum, "STOP", 0))
         can_play_media = _feature_enabled(features, getattr(feature_enum, "PLAY_MEDIA", 0)) if features else True
 
@@ -156,6 +160,7 @@ def output_target_status(
 
     seek_mode = "supported" if can_seek and ha_progress else "best_effort" if enhanced_dlna else "none"
     pause_mode = "supported" if can_pause and live_state else "best_effort" if enhanced_dlna else "none"
+    resume_mode = "supported" if can_play and live_state else "best_effort" if enhanced_dlna else "none"
     stop_mode = "supported" if can_stop and live_state else "best_effort" if enhanced_dlna else "none"
     limited = not playable or (is_dlna and not progress and not enhanced_dlna)
     notes = [
@@ -180,6 +185,7 @@ def output_target_status(
             "progress": bool(progress),
             "seek": seek_mode,
             "pause": pause_mode,
+            "resume": resume_mode,
             "stop": stop_mode,
             "speed": False,
             "artwork": "metadata",

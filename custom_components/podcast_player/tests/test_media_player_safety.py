@@ -117,6 +117,8 @@ class FakeExternalControl:
         self.status = status
         self.stopped = False
         self.seek_position = None
+        self.paused = False
+        self.played = False
 
     async def async_status(self, description_url: str) -> ExternalPlaybackStatus:
         """Return configured status."""
@@ -132,10 +134,12 @@ class FakeExternalControl:
 
     async def async_pause(self, description_url: str) -> None:
         """Record pause."""
+        self.paused = True
         self.status.state = "paused"
 
     async def async_play(self, description_url: str) -> None:
         """Record play."""
+        self.played = True
         self.status.state = "playing"
 
 
@@ -143,6 +147,19 @@ def _enable_fake_dlna(coord: PodcastUpdateCoordinator, control: FakeExternalCont
     """Enable fake enhanced DLNA control."""
     coord._external_control = control
     coord._dlna_description_url = lambda target: "http://example.test/device.xml"  # type: ignore[method-assign]
+    original_target_status = coord._target_status
+
+    def target_status(entity_id: str, state=None):
+        status = original_target_status(entity_id, state)
+        capabilities = status.setdefault("capabilities", {})
+        capabilities["pause"] = "best_effort"
+        capabilities["resume"] = "best_effort"
+        capabilities["seek"] = "best_effort"
+        capabilities["stop"] = "best_effort"
+        capabilities["raw_avtransport"] = True
+        return status
+
+    coord._target_status = target_status  # type: ignore[method-assign]
 
 
 def test_playback_target_off_fails_before_service_call() -> None:
@@ -453,6 +470,79 @@ def test_pause_off_active_target_clears_without_service_call() -> None:
     assert not coord.hass.services.called
 
 
+def test_pause_dlna_best_effort_skips_unsupported_ha_pause() -> None:
+    """A DLNA target without HA pause support uses enhanced DLNA directly."""
+    state = SimpleNamespace(state="playing", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "audio_url": "https://example.test/episode.mp3",
+    }
+    coord.storage.data["player"]["state"] = "playing"
+    coord.storage.data["player"]["current_episode_id"] = "episode-1"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="playing",
+            current_media_id="https://example.test/episode.mp3",
+            supported_actions={"Pause", "Play", "Stop", "Seek"},
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    asyncio.run(coord.async_pause())
+
+    assert control.paused is True
+    assert coord.storage.data["player"]["state"] == "paused"
+    assert coord.storage.data["player"]["external_session"]["transport_state"] == "paused"
+    assert coord.storage.data["player"]["external_session"]["control_source"] == "dlna"
+    assert not coord.hass.services.called
+
+
+def test_pause_dlna_without_pause_action_reports_clean_error() -> None:
+    """A DLNA target that cannot pause returns a Podcast Player error without HA validation noise."""
+    state = SimpleNamespace(state="playing", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["player"]["state"] = "playing"
+    coord.storage.data["player"]["current_episode_id"] = "episode-1"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="playing",
+            current_media_id="https://example.test/episode.mp3",
+            supported_actions={"Stop"},
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    with pytest.raises(HomeAssistantError, match="does not support pause"):
+        asyncio.run(coord.async_pause())
+
+    assert control.paused is False
+    assert coord.storage.data["player"]["state"] == "playing"
+    assert coord.storage.data["player"]["output_mode"] == "speaker"
+    assert "does not support pause" in coord.storage.data["player"]["speaker_last_error"]
+    assert not coord.hass.services.called
+
+
 def test_resume_off_active_target_clears_without_service_call() -> None:
     """Resuming an off active target clears stale speaker state without media_play."""
     state = SimpleNamespace(state="off", attributes={}, name="Kitchen Speaker")
@@ -468,6 +558,41 @@ def test_resume_off_active_target_clears_without_service_call() -> None:
     assert coord.storage.data["player"]["state"] == "idle"
     assert coord.storage.data["player"]["output_mode"] == "browser"
     assert coord.storage.data["player"]["speaker_last_error"]
+    assert not coord.hass.services.called
+
+
+def test_resume_dlna_best_effort_skips_unsupported_ha_play() -> None:
+    """A DLNA target without HA play support uses enhanced DLNA directly."""
+    state = SimpleNamespace(state="paused", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["player"]["state"] = "paused"
+    coord.storage.data["player"]["current_episode_id"] = "episode-1"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+            "transport_state": "paused",
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="paused",
+            current_media_id="https://example.test/episode.mp3",
+            supported_actions={"Play", "Stop", "Seek"},
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    asyncio.run(coord.async_resume())
+
+    assert control.played is True
+    assert coord.storage.data["player"]["state"] == "playing"
+    assert coord.storage.data["player"]["external_session"]["transport_state"] == "playing"
+    assert coord.storage.data["player"]["external_session"]["control_source"] == "dlna"
     assert not coord.hass.services.called
 
 

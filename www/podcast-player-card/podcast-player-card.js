@@ -314,7 +314,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _browserSessionNeedsTakeover() {
-    if (this._isSpeakerOutput() || !this._currentEpisode) return false;
+    if (this._isSpeakerOutput() || this._preferredSpeakerTarget() || !this._currentEpisode) return false;
     const player = this._playerState();
     if (player.current_episode_id !== this._currentEpisode.episode_id) return false;
     if (player.state !== "playing") return false;
@@ -441,8 +441,10 @@ class PodcastPlayerCard extends HTMLElement {
     if (!this._isSpeakerOutput() && this._shared.currentEpisodeId) this._selectedEpisodeId = this._shared.currentEpisodeId;
     this._setSharedBrowserSpeed(this._currentBrowserSpeed(this._currentEpisode), false, false);
     if (!this._fixedOutputTarget) {
-      const sharedOutput = (this._shared && this._shared.preferredOutputTarget) || PodcastPlayerCard._readOutputTargetPreference(this._preferredOutputTarget || "browser");
-      this._setSharedOutputTarget(sharedOutput, false, false);
+      const sharedOutput = this._isSpeakerOutput()
+        ? this._speakerTargetEntity()
+        : (this._shared && this._shared.preferredOutputTarget) || PodcastPlayerCard._readOutputTargetPreference(this._preferredOutputTarget || "browser");
+      this._setSharedOutputTarget(sharedOutput || "browser", false, false);
     }
     this._useProxyForCurrent = Boolean(this._shared.useProxy);
   }
