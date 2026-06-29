@@ -151,8 +151,9 @@ class PodcastStorage:
             return
 
         defaults = default_data()
-        merged = defaults
+        merged = deepcopy(defaults)
         merged.update(stored)
+        needs_save = False
 
         # Keep existing libraries/progress intact, while allowing new default
         # nested keys to appear after upgrades.
@@ -160,21 +161,32 @@ class PodcastStorage:
             base = defaults.get(section, {}).copy()
             existing = stored.get(section) or {}
             if isinstance(existing, dict):
+                if any(key not in existing for key in base):
+                    needs_save = True
                 base.update(existing)
                 if section == "player":
                     external_session = default_external_session()
                     stored_session = existing.get("external_session")
                     if isinstance(stored_session, dict):
+                        if any(key not in stored_session for key in external_session):
+                            needs_save = True
                         external_session.update(stored_session)
+                    else:
+                        needs_save = True
                     base["external_session"] = external_session
             merged[section] = base
 
         for section in ("feeds", "episodes", "progress"):
             if section not in merged or merged[section] is None:
                 merged[section] = defaults[section]
+                needs_save = True
 
         merged["schema_version"] = STORAGE_VERSION
+        if stored.get("schema_version") != STORAGE_VERSION:
+            needs_save = True
         self.data = merged
+        if needs_save:
+            await self.async_save()
 
     async def async_save(self) -> None:
         """Persist storage."""

@@ -1,5 +1,7 @@
 """Regression tests for Podcast Player storage."""
 
+import asyncio
+
 from custom_components.podcast_player.storage import PodcastStorage, default_data, default_external_session
 
 
@@ -42,3 +44,28 @@ def test_default_player_has_external_session() -> None:
     assert data["settings"]["enhanced_dlna_controls"] is True
     assert data["player"]["external_session"] == default_external_session()
     assert data["player"]["external_session"]["active"] is False
+
+
+def test_async_load_persists_new_default_keys() -> None:
+    """Loading older storage documents persists newly introduced default keys."""
+    class FakeStore:
+        def __init__(self) -> None:
+            self.saved = None
+
+        async def async_load(self) -> dict:
+            data = default_data()
+            data["settings"].pop("enhanced_dlna_controls")
+            data["player"].pop("external_session")
+            return data
+
+        async def async_save(self, data: dict) -> None:
+            self.saved = data
+
+    storage = PodcastStorage.__new__(PodcastStorage)
+    storage._store = FakeStore()
+
+    asyncio.run(storage.async_load())
+
+    assert storage.data["settings"]["enhanced_dlna_controls"] is True
+    assert storage.data["player"]["external_session"] == default_external_session()
+    assert storage._store.saved is storage.data
