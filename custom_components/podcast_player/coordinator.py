@@ -44,6 +44,7 @@ FEED_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=20)
 MAX_PARALLEL_REFRESHES = 4
 ACTIVE_MEDIA_PLAYER_STATES = {"playing", "paused", "buffering"}
 EXTERNAL_POLL_SECONDS = 5
+EXTERNAL_STARTUP_GRACE_SECONDS = 30
 
 
 def refresh_interval_from_settings(settings: dict[str, Any]) -> timedelta:
@@ -382,6 +383,78 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         episode = self.storage.get_episode(episode_id) if episode_id else None
         return episode.get("audio_url") if episode else None
 
+    def _external_session_age_seconds(self, session: dict[str, Any]) -> float | None:
+        """Return the age of an external session in seconds."""
+        try:
+            started = datetime.fromisoformat(str(session.get("started_at"))).astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return None
+        return max(0, (datetime.now(timezone.utc) - started).total_seconds())
+
+    def _external_session_in_startup_grace(self, session: dict[str, Any]) -> bool:
+        """Return true while a new external session may still be loading."""
+        age = self._external_session_age_seconds(session)
+        return age is not None and age <= EXTERNAL_STARTUP_GRACE_SECONDS
+
+    def _external_status_matches_session(
+        self,
+        status: ExternalPlaybackStatus,
+        session: dict[str, Any],
+        episode_id: str | None,
+    ) -> bool | None:
+        """Return whether an external status appears to belong to the active session."""
+        return current_media_matches_session(
+            status.current_media_id,
+            self._expected_media_id_for_session(session),
+            episode_id,
+        )
+
+    def _external_status_is_starting(
+        self,
+        status: ExternalPlaybackStatus,
+        session: dict[str, Any],
+        episode_id: str | None,
+    ) -> bool:
+        """Return true for a transient idle report during external startup."""
+        if status.state != "idle" or not session.get("active"):
+            return False
+        if not self._external_session_in_startup_grace(session):
+            return False
+        media_match = self._external_status_matches_session(status, session, episode_id)
+        return media_match is not False
+
+    def _starting_external_status(
+        self,
+        status: ExternalPlaybackStatus,
+        session: dict[str, Any],
+    ) -> ExternalPlaybackStatus:
+        """Return a normalized buffering status for an external session that is starting."""
+        return ExternalPlaybackStatus(
+            state="buffering",
+            transport_state="starting",
+            position=session.get("position") or status.position,
+            duration=status.duration or session.get("duration"),
+            current_media_id=status.current_media_id,
+            supported_actions=status.supported_actions,
+            progress_source=status.progress_source or session.get("progress_source") or "unavailable",
+            control_source=status.control_source or session.get("control_source") or "ha",
+        )
+
+    async def _async_retry_external_start(
+        self,
+        target: str,
+        status: ExternalPlaybackStatus,
+        session: dict[str, Any],
+        episode_id: str | None,
+    ) -> bool:
+        """Best-effort Play retry for DLNA renderers that load media without starting it."""
+        media_match = self._external_status_matches_session(status, session, episode_id)
+        if media_match is False:
+            return False
+        if status.supported_actions and "Play" not in status.supported_actions:
+            return False
+        return await self._async_play_via_dlna(target)
+
     def _apply_external_status(self, status: ExternalPlaybackStatus) -> None:
         """Persist external target status/progress."""
         player = self.storage.data["player"]
@@ -397,7 +470,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {
                 "position": int(position or 0),
                 "duration": duration,
-                "transport_state": status.transport_state or status.state,
+                "transport_state": status.state,
                 "supported_actions": sorted(status.supported_actions or []),
                 "control_source": status.control_source,
                 "progress_source": status.progress_source,
@@ -406,20 +479,16 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "last_error": None,
             }
         )
-        media_match = current_media_matches_session(
-            status.current_media_id,
-            self._expected_media_id_for_session(session),
-            episode_id,
-        )
+        media_match = self._external_status_matches_session(status, session, episode_id)
         if media_match is not None:
             session["media_matches_session"] = media_match
 
-        if status.state in {"playing", "paused"}:
+        if status.state in {"playing", "paused", "buffering"}:
             self.storage.save_progress(
                 episode_id,
                 int(position or 0),
                 duration,
-                playing=status.state == "playing",
+                playing=status.state in {"playing", "buffering"},
                 speed=player.get("speed"),
             )
             player["output_mode"] = "speaker"
@@ -517,6 +586,10 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             status = self._estimated_external_status()
         if status is None:
             return
+        episode_id = session.get("episode_id") or self.storage.data["player"].get("current_episode_id")
+        if self._external_status_is_starting(status, session, episode_id):
+            await self._async_retry_external_start(str(target), status, session, episode_id)
+            status = self._starting_external_status(status, session)
         self._apply_external_status(status)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -954,6 +1027,8 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             resume_position=resume_seconds,
             duration=self.storage.get_progress(episode_id).get("duration") or episode.get("duration_seconds"),
         )
+        if target_info.get("platform") == "dlna_dmr":
+            await self._async_play_via_dlna(media_player_entity_id)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
         self._ensure_external_polling()

@@ -1133,7 +1133,7 @@ class PodcastPlayerCard extends HTMLElement {
       const duration = Number(session.duration || this._playerState().duration || ep.duration_seconds || 0);
       const progressSource = String(session.progress_source || "");
       const updated = session.status_updated_at ? new Date(session.status_updated_at).getTime() : 0;
-      const playing = this._playerState().state === "playing" || String(session.transport_state || "").toLowerCase() === "playing";
+      const playing = this._playerState().state === "playing" || this._externalSessionIsActivePlayback(session);
       if (playing && Number.isFinite(updated) && updated > 0) position += Math.max(0, (Date.now() - updated) / 1000);
       if (duration > 0) position = Math.min(position, duration);
       return {
@@ -1168,7 +1168,7 @@ class PodcastPlayerCard extends HTMLElement {
     if (this._isSpeakerOutput()) {
       const session = this._externalSession();
       if (session.active && session.transport_state) {
-        return String(session.transport_state).toLowerCase() === "playing";
+        return this._externalSessionIsActivePlayback(session);
       }
       if (this._isLimitedSpeakerOutput()) return this._playerState().state === "playing";
       const state = this._speakerState();
@@ -1176,6 +1176,11 @@ class PodcastPlayerCard extends HTMLElement {
       return this._playerState().state === "playing";
     }
     return !this._audio.paused && !this._audio.ended;
+  }
+
+  _externalSessionIsActivePlayback(session = this._externalSession()) {
+    const state = String((session && session.transport_state) || "").toLowerCase();
+    return ["playing", "buffering", "starting", "transitioning", "estimated"].includes(state);
   }
 
   _hasBrowserAudioSession() {
@@ -1197,6 +1202,11 @@ class PodcastPlayerCard extends HTMLElement {
   _playbackStatusText(playing = this._isActuallyPlaying()) {
     if (this._isBrowserAudioLoading()) return this._browserLoadState === "buffering" ? "buffering" : "loading";
     if (this._browserSessionNeedsTakeover()) return "resume needed";
+    if (this._isSpeakerOutput()) {
+      const state = String(this._externalSession().transport_state || "").toLowerCase();
+      if (state === "starting") return "starting";
+      if (state === "buffering" || state === "transitioning") return "buffering";
+    }
     return playing ? "playing" : "paused";
   }
 

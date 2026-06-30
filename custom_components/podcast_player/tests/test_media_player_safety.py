@@ -1,6 +1,7 @@
 """Regression tests for safe media-player target handling."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -649,3 +650,96 @@ def test_external_session_poll_saves_dlna_progress() -> None:
     assert session["duration"] == 3600
     assert session["progress_source"] == "dlna"
     assert coord.storage.data["progress"]["episode-1"]["position"] == 88
+
+
+def test_external_session_startup_idle_dlna_retries_play_without_clearing() -> None:
+    """A fresh DLNA session may report idle before it starts; keep it active and retry Play."""
+    state = SimpleNamespace(state="idle", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "audio_url": "https://example.test/episode.mp3",
+    }
+    coord.storage.data["player"]["state"] = "playing"
+    coord.storage.data["player"]["current_episode_id"] = "episode-1"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+            "target_media_player_name": "Kitchen Speaker",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "position": 0,
+            "duration": 3600,
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="idle",
+            transport_state="STOPPED",
+            position=0,
+            duration=3600,
+            current_media_id="https://example.test/episode.mp3",
+            supported_actions={"Play", "Seek"},
+            progress_source="dlna",
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    asyncio.run(coord.async_update_external_session())
+
+    session = coord.storage.data["player"]["external_session"]
+    assert control.played is True
+    assert session["active"] is True
+    assert session["transport_state"] == "buffering"
+    assert session["target_media_player"] == "media_player.kitchen_speaker"
+    assert coord.storage.data["player"]["state"] == "playing"
+    assert coord.storage.data["player"]["output_mode"] == "speaker"
+    assert coord.storage.data["player"]["target_media_player"] == "media_player.kitchen_speaker"
+
+
+def test_external_session_idle_after_startup_grace_clears_session() -> None:
+    """An idle external target is only treated as ended after the startup grace window."""
+    state = SimpleNamespace(state="idle", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "audio_url": "https://example.test/episode.mp3",
+    }
+    coord.storage.data["player"]["state"] = "playing"
+    coord.storage.data["player"]["current_episode_id"] = "episode-1"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord.storage.data["player"]["target_media_player"] = "media_player.kitchen_speaker"
+    coord.storage.data["player"]["external_session"].update(
+        {
+            "active": True,
+            "episode_id": "episode-1",
+            "target_media_player": "media_player.kitchen_speaker",
+            "target_media_player_name": "Kitchen Speaker",
+            "started_at": (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),
+            "duration": 3600,
+        }
+    )
+    control = FakeExternalControl(
+        ExternalPlaybackStatus(
+            state="idle",
+            transport_state="STOPPED",
+            position=0,
+            duration=3600,
+            current_media_id="https://example.test/episode.mp3",
+            supported_actions={"Play", "Seek"},
+            progress_source="dlna",
+            control_source="dlna",
+        )
+    )
+    _enable_fake_dlna(coord, control)
+
+    asyncio.run(coord.async_update_external_session())
+
+    assert control.played is False
+    assert coord.storage.data["player"]["external_session"]["active"] is False
+    assert coord.storage.data["player"]["state"] == "idle"
+    assert coord.storage.data["player"]["output_mode"] == "browser"
