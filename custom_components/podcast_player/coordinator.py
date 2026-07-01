@@ -306,7 +306,10 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def media_source_target_status(self, entity_id: str) -> dict[str, Any]:
         """Return target status for Media Browser playback resolution."""
-        return self._target_status(entity_id)
+        status = self._target_status(entity_id)
+        if "platform" not in status:
+            status["platform"] = self._target_registry_info(entity_id).get("platform")
+        return status
 
     def _target_control_mode(self, entity_id: str, state: Any | None, capability: str) -> str:
         """Return the advertised control mode for an external target."""

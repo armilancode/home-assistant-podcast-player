@@ -294,6 +294,70 @@ def test_resolve_direct_first_speaker_target_uses_direct_url(monkeypatch: pytest
     assert not runtime.storage.saved
 
 
+def test_resolve_direct_first_dlna_target_prefers_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DLNA Media Browser playback receives a simple HA URL even in direct-first mode."""
+    runtime = _runtime()
+    runtime.coordinator.target_statuses["media_player.dlna_speaker"] = {
+        "playable": True,
+        "reason": None,
+        "platform": "dlna_dmr",
+        "capabilities": {
+            "play_media": True,
+            "progress": True,
+            "seek": "best_effort",
+            "raw_avtransport": True,
+        },
+    }
+    _add_feed(runtime.storage, "feed_1", "Feed One")
+    _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
+
+    def fake_proxy(_hass, settings, _episode_id) -> str:
+        settings["speaker_proxy_secret"] = "new-secret"
+        return "https://ha.example.test/proxy"
+
+    monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_proxy_url", fake_proxy)
+
+    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.dlna_speaker")))
+
+    assert resolved.url == "https://ha.example.test/proxy"
+    assert resolved.mime_type == "audio/mpeg"
+    assert runtime.coordinator.prepared_media_source_playback == [
+        {
+            "episode_id": "ep_1",
+            "media_player_entity_id": "media_player.dlna_speaker",
+            "media_content_id": "https://ha.example.test/proxy",
+            "media_content_type": "audio/mpeg",
+            "url_mode": "signed_proxy",
+        }
+    ]
+    assert runtime.storage.saved
+
+
+def test_resolve_direct_first_dlna_target_falls_back_to_direct_without_ha_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DLNA proxy preference falls back to direct when HA cannot build a URL."""
+    runtime = _runtime()
+    runtime.coordinator.target_statuses["media_player.dlna_speaker"] = {
+        "playable": True,
+        "reason": None,
+        "platform": "dlna_dmr",
+        "capabilities": {
+            "play_media": True,
+            "progress": True,
+            "seek": "best_effort",
+            "raw_avtransport": True,
+        },
+    }
+    _add_feed(runtime.storage, "feed_1", "Feed One")
+    _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
+    monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_proxy_url", lambda *args: None)
+
+    resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.dlna_speaker")))
+
+    assert resolved.url == "https://cdn.example.test/ep_1.mp3"
+    assert runtime.coordinator.prepared_media_source_playback[0]["url_mode"] == "direct"
+    assert not runtime.storage.saved
+
+
 def test_resolve_prefers_proxy_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """Proxy-first target resolve returns the signed proxy and prepares the backend session."""
     runtime = _runtime()

@@ -87,6 +87,7 @@ class PodcastMediaSource(MediaSource):
             episode_id,
             direct_url,
             str(target) if target is not None else None,
+            target_status,
         )
 
         if target is not None:
@@ -314,10 +315,16 @@ def _resolve_episode_url_for_target(
     episode_id: str,
     direct_url: str,
     target_media_player: str | None,
+    target_status: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """Return the URL and URL mode that should be handed to Home Assistant."""
     if target_media_player is None:
         return make_signed_speaker_proxy_path(settings, episode_id), URL_MODE_SIGNED_PROXY
+
+    if _target_prefers_proxy(target_status):
+        proxy_url = make_signed_speaker_proxy_url(hass, settings, episode_id)
+        if proxy_url:
+            return proxy_url, URL_MODE_SIGNED_PROXY
 
     if settings.get("direct_first", True):
         return direct_url, URL_MODE_DIRECT
@@ -326,6 +333,25 @@ def _resolve_episode_url_for_target(
     if proxy_url:
         return proxy_url, URL_MODE_SIGNED_PROXY
     return direct_url, URL_MODE_DIRECT
+
+
+def _target_prefers_proxy(target_status: dict[str, Any] | None) -> bool:
+    """Return whether a target should receive a simple Home Assistant URL.
+
+    Some media players advertise generic play_media support but are poor at
+    fetching public podcast URLs with HTTPS redirects, tracker URLs, or CDN
+    headers. DLNA DMR targets are the most common case. Prefer the signed LAN
+    proxy for those targets even when the global preference is direct-first.
+    """
+    if not target_status:
+        return False
+    platform = target_status.get("platform")
+    capabilities = target_status.get("capabilities") or {}
+    return bool(
+        platform == "dlna_dmr"
+        or capabilities.get("raw_avtransport")
+        or capabilities.get("limited_controls")
+    )
 
 
 def _episode_display_title(
