@@ -412,7 +412,6 @@ def _didl_metadata_for_target(
     )
     description = _clean_didl_text(episode.get("description") or feed.get("description"))
     published = _clean_didl_text(episode.get("published"))
-    duration = _didl_duration(episode.get("duration_seconds"))
     original_artwork = episode.get("artwork_url") or feed.get("artwork_url")
     artwork = (
         make_signed_speaker_artwork_proxy_url(hass, settings, episode_id)
@@ -421,9 +420,9 @@ def _didl_metadata_for_target(
     ) or _clean_didl_text(original_artwork)
 
     metadata: dict[str, Any] = {
-        "id": f"episode:{episode_id}",
-        "parent_id": f"feed:{episode.get('feed_id') or 'podcasts'}",
-        "restricted": "1",
+        "id": "0",
+        "parent_id": "-1",
+        "restricted": "false",
         "title": title,
         "creator": podcast_name,
         "artist": podcast_name,
@@ -433,7 +432,6 @@ def _didl_metadata_for_target(
             didl_lite.Resource(
                 media_url,
                 f"http-get:*:{mime_type}:*",
-                duration=duration,
             )
         ],
     }
@@ -458,20 +456,6 @@ def _clean_didl_text(value: Any) -> str | None:
     """Return a safe string value for DIDL metadata."""
     text = str(value or "").strip()
     return text or None
-
-
-def _didl_duration(value: Any) -> str | None:
-    """Return DIDL duration in HH:MM:SS format."""
-    try:
-        seconds = int(float(value or 0))
-    except (TypeError, ValueError):
-        return None
-    if seconds <= 0:
-        return None
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def _episode_display_title(
