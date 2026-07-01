@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from async_upnp_client.profiles.dlna import didl_lite
 from homeassistant.components.media_player import MediaClass, MediaType
 from homeassistant.components.media_source import Unresolvable
 
@@ -316,11 +317,23 @@ def test_resolve_direct_first_dlna_target_prefers_proxy(monkeypatch: pytest.Monk
         return "https://ha.example.test/proxy"
 
     monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_proxy_url", fake_proxy)
+    monkeypatch.setattr(
+        "custom_components.podcast_player.media_source.make_signed_speaker_artwork_proxy_url",
+        lambda *args: "https://ha.example.test/artwork",
+    )
 
     resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.dlna_speaker")))
 
     assert resolved.url == "https://ha.example.test/proxy"
     assert resolved.mime_type == "audio/mpeg"
+    assert resolved.didl_metadata.title == "Episode"
+    assert resolved.didl_metadata.creator == "Feed One"
+    assert resolved.didl_metadata.artist == "Feed One"
+    assert resolved.didl_metadata.album == "Feed One"
+    didl_xml = didl_lite.to_xml_string(resolved.didl_metadata).decode("utf-8")
+    assert "<dc:title>Episode</dc:title>" in didl_xml
+    assert "<upnp:artist>Feed One</upnp:artist>" in didl_xml
+    assert "<upnp:albumArtURI>https://ha.example.test/artwork</upnp:albumArtURI>" in didl_xml
     assert runtime.coordinator.prepared_media_source_playback == [
         {
             "episode_id": "ep_1",
@@ -350,10 +363,15 @@ def test_resolve_direct_first_dlna_target_falls_back_to_direct_without_ha_url(mo
     _add_feed(runtime.storage, "feed_1", "Feed One")
     _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
     monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_proxy_url", lambda *args: None)
+    monkeypatch.setattr(
+        "custom_components.podcast_player.media_source.make_signed_speaker_artwork_proxy_url",
+        lambda *args: None,
+    )
 
     resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.dlna_speaker")))
 
     assert resolved.url == "https://cdn.example.test/ep_1.mp3"
+    assert resolved.didl_metadata.title == "Episode"
     assert runtime.coordinator.prepared_media_source_playback[0]["url_mode"] == "direct"
     assert not runtime.storage.saved
 

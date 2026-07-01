@@ -18,7 +18,11 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, NAME, URL_MODE_DIRECT, URL_MODE_SIGNED_PROXY
 from .coordinator import PodcastRuntime
-from .speaker_proxy import make_signed_speaker_proxy_path, make_signed_speaker_proxy_url
+from .speaker_proxy import (
+    make_signed_speaker_artwork_proxy_url,
+    make_signed_speaker_proxy_path,
+    make_signed_speaker_proxy_url,
+)
 
 FEEDS_IDENTIFIER = "feeds"
 LATEST_LIMIT = 25
@@ -40,6 +44,17 @@ def _runtime(hass: HomeAssistant) -> PodcastRuntime | None:
     if not entries:
         return None
     return next(iter(entries.values()))
+
+
+class _PodcastPlayMedia(PlayMedia):
+    """Resolved podcast media with optional DLNA metadata."""
+
+    __slots__ = ("didl_metadata",)
+
+    def __init__(self, url: str, mime_type: str, *, didl_metadata: Any = None) -> None:
+        """Initialize resolved media."""
+        super().__init__(url=url, mime_type=mime_type)
+        self.didl_metadata = didl_metadata
 
 
 class PodcastMediaSource(MediaSource):
@@ -90,13 +105,16 @@ class PodcastMediaSource(MediaSource):
             target_status,
         )
 
+        mime_type = episode.get("audio_type") or "audio/mpeg"
+        feed = runtime.storage.get_feed(episode.get("feed_id")) or {}
+
         if target is not None:
             try:
                 await runtime.coordinator.async_prepare_media_source_playback(
                     episode_id=episode_id,
                     media_player_entity_id=str(target),
                     media_content_id=url,
-                    media_content_type=episode.get("audio_type") or "audio/mpeg",
+                    media_content_type=mime_type,
                     url_mode=url_mode,
                 )
             except HomeAssistantError as err:
@@ -105,7 +123,20 @@ class PodcastMediaSource(MediaSource):
         if not secret_before and settings.get("speaker_proxy_secret"):
             await runtime.storage.async_save()
 
-        return PlayMedia(url=url, mime_type=episode.get("audio_type") or "audio/mpeg")
+        return _PodcastPlayMedia(
+            url=url,
+            mime_type=mime_type,
+            didl_metadata=_didl_metadata_for_target(
+                self.hass,
+                settings,
+                episode_id,
+                episode,
+                feed,
+                url,
+                mime_type,
+                target_status,
+            ),
+        )
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Browse podcast feeds and episodes."""
@@ -352,6 +383,95 @@ def _target_prefers_proxy(target_status: dict[str, Any] | None) -> bool:
         or capabilities.get("raw_avtransport")
         or capabilities.get("limited_controls")
     )
+
+
+def _didl_metadata_for_target(
+    hass: HomeAssistant,
+    settings: dict[str, Any],
+    episode_id: str,
+    episode: dict[str, Any],
+    feed: dict[str, Any],
+    media_url: str,
+    mime_type: str,
+    target_status: dict[str, Any] | None,
+) -> Any:
+    """Return DLNA DIDL-Lite metadata for targets that consume it."""
+    if not _target_prefers_proxy(target_status):
+        return None
+
+    try:
+        from async_upnp_client.profiles.dlna import didl_lite  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return None
+
+    title = _clean_didl_text(episode.get("title")) or "Podcast episode"
+    podcast_name = (
+        _clean_didl_text(feed.get("title"))
+        or _clean_didl_text(feed.get("author"))
+        or "Podcast"
+    )
+    description = _clean_didl_text(episode.get("description") or feed.get("description"))
+    published = _clean_didl_text(episode.get("published"))
+    duration = _didl_duration(episode.get("duration_seconds"))
+    original_artwork = episode.get("artwork_url") or feed.get("artwork_url")
+    artwork = (
+        make_signed_speaker_artwork_proxy_url(hass, settings, episode_id)
+        if original_artwork
+        else None
+    ) or _clean_didl_text(original_artwork)
+
+    metadata: dict[str, Any] = {
+        "id": f"episode:{episode_id}",
+        "parent_id": f"feed:{episode.get('feed_id') or 'podcasts'}",
+        "restricted": "1",
+        "title": title,
+        "creator": podcast_name,
+        "artist": podcast_name,
+        "album": podcast_name,
+        "publisher": podcast_name,
+        "resources": [
+            didl_lite.Resource(
+                media_url,
+                f"http-get:*:{mime_type}:*",
+                duration=duration,
+            )
+        ],
+    }
+    if description:
+        metadata["description"] = description
+    if published:
+        metadata["date"] = published
+
+    try:
+        didl = didl_lite.MusicTrack(**metadata)
+    except Exception:  # noqa: BLE001 - metadata must not block playback
+        return None
+
+    if artwork:
+        didl.didl_properties_defs = didl.didl_properties_defs + [("upnp", "albumArtURI", "O")]
+        didl.album_art_uri = artwork
+
+    return didl
+
+
+def _clean_didl_text(value: Any) -> str | None:
+    """Return a safe string value for DIDL metadata."""
+    text = str(value or "").strip()
+    return text or None
+
+
+def _didl_duration(value: Any) -> str | None:
+    """Return DIDL duration in HH:MM:SS format."""
+    try:
+        seconds = int(float(value or 0))
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def _episode_display_title(
