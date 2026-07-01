@@ -15,6 +15,13 @@ Implemented today:
 - Companion Lovelace card under `www/podcast-player-card/`.
 - Signed proxy routes for media players that need a Home Assistant URL.
 
+## Playback surfaces
+
+Podcast Player supports two Home Assistant playback surfaces:
+
+- **Media Browser** exposes podcast feeds and episodes to Home Assistant's native media picker. Playback is handed to the selected Home Assistant `media_player`, so native progress and seek controls depend on that target integration.
+- **Podcast Player card and actions** provide the richer control path, including backend session tracking and enhanced external playback controls where supported.
+
 Roadmap:
 
 - Broader Media Browser browsing and playback coverage.

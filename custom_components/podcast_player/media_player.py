@@ -150,7 +150,7 @@ class PodcastPlayerEntity(CoordinatorEntity[PodcastUpdateCoordinator], MediaPlay
             "played": progress.get("played"),
             "last_played_at": progress.get("last_played_at"),
             "browser_audio_required": True,
-            "recommended_controls": "Use custom:podcast-player-card for browser playback, or podcast_player.play_on_media_player for speaker playback; native HA media popup is state-only.",
+            "recommended_controls": "Use custom:podcast-player-card or podcast_player actions for enhanced controls. Home Assistant Media Browser can start playback on supported media_player targets, but native progress and seek depend on the target integration.",
         }
 
     async def async_media_play(self) -> None:

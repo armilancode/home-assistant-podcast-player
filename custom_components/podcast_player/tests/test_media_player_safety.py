@@ -273,6 +273,41 @@ def test_play_on_media_player_creates_sanitized_external_session() -> None:
     assert session["media_content_id_hash"] != "https://example.test/episode.mp3"
 
 
+def test_prepare_media_source_playback_creates_session_without_service_call() -> None:
+    """Media Source resolution prepares shared backend state but leaves playback to HA."""
+    state = SimpleNamespace(state="idle", attributes={}, name="Kitchen Speaker")
+    coord = _coordinator(state)
+    coord.storage.data["episodes"]["episode-1"] = {
+        "episode_id": "episode-1",
+        "feed_id": "feed-1",
+        "audio_url": "https://example.test/episode.mp3",
+        "duration_seconds": 3600,
+    }
+
+    asyncio.run(
+        coord.async_prepare_media_source_playback(
+            episode_id="episode-1",
+            media_player_entity_id="media_player.kitchen_speaker",
+            media_content_id="https://example.test/episode.mp3",
+            media_content_type="audio/mpeg",
+            url_mode="direct",
+        )
+    )
+
+    player = coord.storage.data["player"]
+    session = player["external_session"]
+    assert player["state"] == "playing"
+    assert player["output_mode"] == "speaker"
+    assert player["target_media_player"] == "media_player.kitchen_speaker"
+    assert player["speaker_url_mode"] == "direct"
+    assert session["active"] is True
+    assert session["episode_id"] == "episode-1"
+    assert session["transport_state"] == "buffering"
+    assert session["media_content_id_hash"]
+    assert session["media_content_id_hash"] != "https://example.test/episode.mp3"
+    assert not coord.hass.services.called
+
+
 def test_stop_unavailable_active_target_clears_without_service_call() -> None:
     """Stopping an unavailable active target clears local state without direct internals."""
     state = SimpleNamespace(state="unavailable", attributes={}, name="Kitchen Speaker")

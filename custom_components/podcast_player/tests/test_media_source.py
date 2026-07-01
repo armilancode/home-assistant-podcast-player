@@ -48,6 +48,8 @@ class FakeCoordinator:
 
     def __init__(self, storage: FakeStorage) -> None:
         self.storage = storage
+        self.prepared_media_source_playback: list[dict] = []
+        self.target_statuses: dict[str, dict] = {}
 
     def active_episodes(self, feed_id: str | None = None, *, feed_ids: set[str] | None = None) -> list[dict]:
         """Return active episodes sorted newest first."""
@@ -63,6 +65,26 @@ class FakeCoordinator:
         ]
         episodes.sort(key=lambda episode: episode.get("published") or "", reverse=True)
         return episodes
+
+    def media_source_target_status(self, entity_id: str) -> dict:
+        """Return fake target status for Media Source resolution."""
+        return self.target_statuses.get(
+            entity_id,
+            {
+                "playable": True,
+                "reason": None,
+                "capabilities": {
+                    "play_media": True,
+                    "progress": False,
+                    "seek": "none",
+                    "raw_avtransport": False,
+                },
+            },
+        )
+
+    async def async_prepare_media_source_playback(self, **kwargs) -> None:
+        """Record media-source playback preparation."""
+        self.prepared_media_source_playback.append(kwargs)
 
 
 def _runtime() -> SimpleNamespace:
@@ -238,10 +260,11 @@ def test_resolve_browser_playback_uses_relative_proxy() -> None:
     )
     assert resolved.mime_type == "audio/mpeg"
     assert runtime.storage.saved
+    assert runtime.coordinator.prepared_media_source_playback == []
 
 
 def test_resolve_direct_first_speaker_target_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Direct-first speaker-target resolve does not create a proxy URL when direct audio exists."""
+    """Direct-first speaker-target resolve prepares the backend session with the direct URL."""
     runtime = _runtime()
     _add_feed(runtime.storage, "feed_1", "Feed One")
     _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
@@ -259,11 +282,20 @@ def test_resolve_direct_first_speaker_target_uses_direct_url(monkeypatch: pytest
     assert resolved.url == "https://cdn.example.test/ep_1.mp3"
     assert resolved.mime_type == "audio/mpeg"
     assert not called
+    assert runtime.coordinator.prepared_media_source_playback == [
+        {
+            "episode_id": "ep_1",
+            "media_player_entity_id": "media_player.speaker",
+            "media_content_id": "https://cdn.example.test/ep_1.mp3",
+            "media_content_type": "audio/mpeg",
+            "url_mode": "direct",
+        }
+    ]
     assert not runtime.storage.saved
 
 
 def test_resolve_prefers_proxy_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Proxy-first resolve returns the signed proxy and persists a new proxy secret."""
+    """Proxy-first target resolve returns the signed proxy and prepares the backend session."""
     runtime = _runtime()
     runtime.storage.data["settings"]["direct_first"] = False
     _add_feed(runtime.storage, "feed_1", "Feed One")
@@ -278,6 +310,15 @@ def test_resolve_prefers_proxy_when_configured(monkeypatch: pytest.MonkeyPatch) 
     resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.speaker")))
 
     assert resolved.url == "https://ha.example.test/proxy"
+    assert runtime.coordinator.prepared_media_source_playback == [
+        {
+            "episode_id": "ep_1",
+            "media_player_entity_id": "media_player.speaker",
+            "media_content_id": "https://ha.example.test/proxy",
+            "media_content_type": "audio/mpeg",
+            "url_mode": "signed_proxy",
+        }
+    ]
     assert runtime.storage.saved
 
 
@@ -292,7 +333,25 @@ def test_resolve_proxy_mode_falls_back_to_direct(monkeypatch: pytest.MonkeyPatch
     resolved = asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.speaker")))
 
     assert resolved.url == "https://cdn.example.test/ep_1.mp3"
+    assert runtime.coordinator.prepared_media_source_playback[0]["url_mode"] == "direct"
     assert not runtime.storage.saved
+
+
+def test_resolve_unavailable_target_fails_before_play_media() -> None:
+    """Media Browser playback fails clearly when the selected target is unavailable."""
+    runtime = _runtime()
+    runtime.coordinator.target_statuses["media_player.offline"] = {
+        "playable": False,
+        "reason": "Speaker is unavailable.",
+        "capabilities": {"play_media": False},
+    }
+    _add_feed(runtime.storage, "feed_1", "Feed One")
+    _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
+
+    with pytest.raises(Unresolvable, match="Speaker is unavailable"):
+        asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.offline")))
+
+    assert runtime.coordinator.prepared_media_source_playback == []
 
 
 def test_resolve_missing_or_unplayable_episode_raises() -> None:

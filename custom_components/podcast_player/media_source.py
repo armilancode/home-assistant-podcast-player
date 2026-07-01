@@ -14,8 +14,9 @@ from homeassistant.components.media_source import (
     generate_media_source_id,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, NAME
+from .const import DOMAIN, NAME, URL_MODE_DIRECT, URL_MODE_SIGNED_PROXY
 from .coordinator import PodcastRuntime
 from .speaker_proxy import make_signed_speaker_proxy_path, make_signed_speaker_proxy_url
 
@@ -72,13 +73,33 @@ class PodcastMediaSource(MediaSource):
 
         settings = runtime.storage.data["settings"]
         secret_before = settings.get("speaker_proxy_secret")
-        url = direct_url
-        if item.target_media_player is None:
-            url = make_signed_speaker_proxy_path(settings, episode_id)
-        elif not settings.get("direct_first", True):
-            proxy_url = make_signed_speaker_proxy_url(self.hass, settings, episode_id)
-            if proxy_url:
-                url = proxy_url
+        target = item.target_media_player
+        target_status = None
+        if target is not None:
+            target_status = runtime.coordinator.media_source_target_status(str(target))
+            if not target_status.get("playable"):
+                reason = target_status.get("reason") or f"Target media player is not available: {target}"
+                raise Unresolvable(str(reason))
+
+        url, url_mode = _resolve_episode_url_for_target(
+            self.hass,
+            settings,
+            episode_id,
+            direct_url,
+            str(target) if target is not None else None,
+        )
+
+        if target is not None:
+            try:
+                await runtime.coordinator.async_prepare_media_source_playback(
+                    episode_id=episode_id,
+                    media_player_entity_id=str(target),
+                    media_content_id=url,
+                    media_content_type=episode.get("audio_type") or "audio/mpeg",
+                    url_mode=url_mode,
+                )
+            except HomeAssistantError as err:
+                raise Unresolvable(str(err)) from err
 
         if not secret_before and settings.get("speaker_proxy_secret"):
             await runtime.storage.async_save()
@@ -285,6 +306,26 @@ def _parts(identifier: str | None) -> list[str]:
     if not identifier:
         return []
     return [part for part in str(identifier).strip("/").split("/") if part]
+
+
+def _resolve_episode_url_for_target(
+    hass: HomeAssistant,
+    settings: dict[str, Any],
+    episode_id: str,
+    direct_url: str,
+    target_media_player: str | None,
+) -> tuple[str, str]:
+    """Return the URL and URL mode that should be handed to Home Assistant."""
+    if target_media_player is None:
+        return make_signed_speaker_proxy_path(settings, episode_id), URL_MODE_SIGNED_PROXY
+
+    if settings.get("direct_first", True):
+        return direct_url, URL_MODE_DIRECT
+
+    proxy_url = make_signed_speaker_proxy_url(hass, settings, episode_id)
+    if proxy_url:
+        return proxy_url, URL_MODE_SIGNED_PROXY
+    return direct_url, URL_MODE_DIRECT
 
 
 def _episode_display_title(

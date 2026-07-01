@@ -304,6 +304,10 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             enhanced_dlna_controls=self._enhanced_dlna_controls_enabled(),
         )
 
+    def media_source_target_status(self, entity_id: str) -> dict[str, Any]:
+        """Return target status for Media Browser playback resolution."""
+        return self._target_status(entity_id)
+
     def _target_control_mode(self, entity_id: str, state: Any | None, capability: str) -> str:
         """Return the advertised control mode for an external target."""
         status = self._target_status(entity_id, state)
@@ -1042,6 +1046,59 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
         )
         return episode
+
+    async def async_prepare_media_source_playback(
+        self,
+        *,
+        episode_id: str,
+        media_player_entity_id: str,
+        media_content_id: str,
+        media_content_type: str,
+        url_mode: str,
+    ) -> None:
+        """Register an external session started through Home Assistant Media Browser.
+
+        Media Source resolution returns a playable URL to Home Assistant. The
+        selected target media_player still receives HA's native play_media call,
+        but preparing the session here lets Podcast Player services and cards
+        observe, stop, seek, and poll the target after playback starts.
+        """
+        episode = self.storage.get_episode(episode_id)
+        if not episode:
+            raise HomeAssistantError("Podcast episode was not found")
+
+        target_state = self._validate_media_player_output_target(media_player_entity_id)
+        target_info = self._target_registry_info(media_player_entity_id)
+        resume_seconds = self._resume_position_for_episode(episode_id)
+
+        self.storage.set_player_state("playing", episode_id)
+        player = self.storage.data["player"]
+        if resume_seconds > 0:
+            player["position"] = resume_seconds
+            self.storage.get_progress(episode_id)["position"] = resume_seconds
+        player["output_mode"] = "speaker"
+        player["target_media_player"] = media_player_entity_id
+        player["target_media_player_name"] = target_state.name
+        player["last_target_media_player"] = media_player_entity_id
+        player["last_target_media_player_name"] = target_state.name
+        player["speaker_url_mode"] = url_mode
+        player["speaker_media_content_type"] = media_content_type
+        player["speaker_last_error"] = None
+        session = self._set_external_session(
+            episode_id=episode_id,
+            target=media_player_entity_id,
+            target_name=target_state.name,
+            target_platform=target_info.get("platform"),
+            media_content_id=media_content_id,
+            resume_position=resume_seconds,
+            duration=self.storage.get_progress(episode_id).get("duration") or episode.get("duration_seconds"),
+        )
+        session["transport_state"] = "buffering"
+        session["progress_source"] = "unavailable"
+        session["control_source"] = "ha"
+        await self.storage.async_save()
+        self.async_set_updated_data(self.storage.snapshot())
+        self._ensure_external_polling()
 
     async def async_stop_media_player(self, media_player_entity_id: str | None = None, force: bool = False) -> None:
         """Stop a target media player used for podcast speaker output."""
