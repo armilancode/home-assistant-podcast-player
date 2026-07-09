@@ -47,6 +47,52 @@ EXTERNAL_POLL_SECONDS = 5
 EXTERNAL_STARTUP_GRACE_SECONDS = 30
 
 
+async def _async_fetch_feed_text(session: aiohttp.ClientSession, rss_url: str) -> tuple[str, str]:
+    """Fetch raw feed text and return text plus final URL."""
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"}
+    async with session.get(rss_url, headers=headers, timeout=FEED_FETCH_TIMEOUT, allow_redirects=True) as resp:
+        if resp.status >= 400:
+            raise PodcastParseError("http_error", f"Feed server returned HTTP {resp.status}.")
+        total = 0
+        chunks: list[bytes] = []
+        async for chunk in resp.content.iter_chunked(64 * 1024):
+            total += len(chunk)
+            if total > MAX_FEED_BODY_BYTES:
+                raise PodcastParseError("too_large", "Feed is larger than the 10 MB safety limit.")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        encoding = resp.charset or "utf-8"
+        return raw.decode(encoding, errors="replace"), str(resp.url)
+
+
+async def async_fetch_and_parse_feed(hass: HomeAssistant, rss_url: str, feed_id: str | None = None) -> dict[str, Any]:
+    """Fetch and parse a feed URL without mutating integration storage."""
+    try:
+        normalized_url = normalize_rss_url(rss_url)
+    except ValueError as err:
+        raise PodcastParseError("invalid_url", str(err)) from err
+
+    try:
+        raw_text, final_url = await _async_fetch_feed_text(async_get_clientsession(hass), normalized_url)
+    except asyncio.TimeoutError as err:
+        raise PodcastParseError("timeout", "Feed server timed out.") from err
+    except aiohttp.ClientSSLError as err:
+        raise PodcastParseError("ssl_error", str(err)) from err
+    except aiohttp.TooManyRedirects as err:
+        raise PodcastParseError("redirect_loop", "Feed redirects too many times.") from err
+    except aiohttp.ClientError as err:
+        raise PodcastParseError("cannot_connect", str(err)) from err
+
+    parsed = await hass.async_add_executor_job(parse_podcast_feed, raw_text, normalized_url, feed_id or make_feed_id(normalized_url))
+    parsed["canonical_url"] = final_url
+    return parsed
+
+
+async def async_validate_feed_url(hass: HomeAssistant, rss_url: str) -> None:
+    """Validate that a feed URL can be fetched and parsed."""
+    await async_fetch_and_parse_feed(hass, rss_url)
+
+
 def refresh_interval_from_settings(settings: dict[str, Any]) -> timedelta:
     """Return a safe refresh interval from persisted settings."""
     try:
@@ -131,20 +177,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_fetch_feed_text(self, rss_url: str) -> tuple[str, str]:
         """Fetch raw feed text and return text plus final URL."""
-        headers = {"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"}
-        async with self._session.get(rss_url, headers=headers, timeout=FEED_FETCH_TIMEOUT, allow_redirects=True) as resp:
-            if resp.status >= 400:
-                raise PodcastParseError("http_error", f"Feed server returned HTTP {resp.status}.")
-            total = 0
-            chunks: list[bytes] = []
-            async for chunk in resp.content.iter_chunked(64 * 1024):
-                total += len(chunk)
-                if total > MAX_FEED_BODY_BYTES:
-                    raise PodcastParseError("too_large", "Feed is larger than the 10 MB safety limit.")
-                chunks.append(chunk)
-            raw = b"".join(chunks)
-            encoding = resp.charset or "utf-8"
-            return raw.decode(encoding, errors="replace"), str(resp.url)
+        return await _async_fetch_feed_text(self._session, rss_url)
 
     async def async_add_feed(self, rss_url: str) -> dict[str, Any]:
         """Add and immediately refresh a feed."""
@@ -216,20 +249,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_refresh_single_url(self, feed_id: str, rss_url: str) -> dict[str, Any]:
         """Fetch and parse a feed URL."""
         async with self._refresh_sem:
-            try:
-                raw_text, final_url = await self.async_fetch_feed_text(rss_url)
-            except asyncio.TimeoutError as err:
-                raise PodcastParseError("timeout", "Feed server timed out.") from err
-            except aiohttp.ClientSSLError as err:
-                raise PodcastParseError("ssl_error", str(err)) from err
-            except aiohttp.TooManyRedirects as err:
-                raise PodcastParseError("redirect_loop", "Feed redirects too many times.") from err
-            except aiohttp.ClientError as err:
-                raise PodcastParseError("cannot_connect", str(err)) from err
-
-            parsed = await self.hass.async_add_executor_job(parse_podcast_feed, raw_text, rss_url, feed_id)
-            parsed["canonical_url"] = final_url
-            return parsed
+            return await async_fetch_and_parse_feed(self.hass, rss_url, feed_id)
 
     def _fire_new_episode_events(self, new_episodes: list[dict[str, Any]]) -> None:
         """Fire events for new episodes."""

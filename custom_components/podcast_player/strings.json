@@ -29,6 +29,8 @@
       "already_configured": "Podcast Player is already configured."
     },
     "error": {
+      "cannot_add_feed": "Could not add this podcast feed. Check that it is a playable podcast RSS feed and try again.",
+      "cannot_connect": "Could not connect to this podcast feed. Check the URL and try again.",
       "invalid_url": "Enter a valid RSS URL starting with http:// or https://."
     }
   },

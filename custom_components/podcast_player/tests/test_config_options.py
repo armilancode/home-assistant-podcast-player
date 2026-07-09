@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
@@ -83,17 +83,19 @@ async def test_user_flow_shows_form(hass, enable_custom_integrations) -> None:
 async def test_user_flow_creates_entry(hass, enable_custom_integrations) -> None:
     """The user step stores normalized options and optional initial feed data."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            **USER_INPUT,
-            CONF_INITIAL_RSS_URL: " https://example.test/feed.xml ",
-        },
-    )
+    with patch("custom_components.podcast_player.config_flow.async_validate_feed_url", AsyncMock()) as validate_feed:
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                **USER_INPUT,
+                CONF_INITIAL_RSS_URL: " https://example.test/feed.xml ",
+            },
+        )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == NAME
     assert result["data"] == {CONF_INITIAL_RSS_URL: "https://example.test/feed.xml"}
+    validate_feed.assert_awaited_once_with(hass, "https://example.test/feed.xml")
     assert result["options"] == {
         CONF_REFRESH_INTERVAL_MINUTES: 45,
         CONF_MAX_EPISODES_PER_FEED: 250,
@@ -127,6 +129,35 @@ async def test_user_flow_rejects_invalid_initial_feed_url(hass, enable_custom_in
         )
 
     assert err.value.schema_errors == {CONF_INITIAL_RSS_URL: "RSS URL must start with http:// or https://"}
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_error"),
+    [
+        (PodcastParseError("cannot_connect", "Cannot connect"), "cannot_connect"),
+        (PodcastParseError("no_audio_enclosures", "No audio"), "cannot_add_feed"),
+    ],
+)
+async def test_user_flow_rejects_initial_feed_probe_errors(
+    hass,
+    enable_custom_integrations,
+    side_effect: Exception,
+    expected_error: str,
+) -> None:
+    """The setup flow validates a provided first feed before creating an entry."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+    with patch("custom_components.podcast_player.config_flow.async_validate_feed_url", AsyncMock(side_effect=side_effect)):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                **USER_INPUT,
+                CONF_INITIAL_RSS_URL: "https://example.test/feed.xml",
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_INITIAL_RSS_URL: expected_error}
 
 
 async def test_options_flow_updates_options_without_loaded_runtime(hass, enable_custom_integrations) -> None:

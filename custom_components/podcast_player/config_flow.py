@@ -34,13 +34,14 @@ from .const import (
     URL_MODE_DIRECT,
     URL_MODE_SIGNED_PROXY,
 )
-from .coordinator import PodcastRuntime
+from .coordinator import PodcastRuntime, async_validate_feed_url
 from .feed_parser import PodcastParseError
 from .storage import normalize_rss_url
 
 _LOGGER = logging.getLogger(__name__)
 
 NO_FEED_SELECTION = "__none__"
+CONNECTIVITY_FEED_ERROR_CODES = {"cannot_connect", "http_error", "redirect_loop", "ssl_error", "timeout"}
 URL_MODE_OPTIONS = {
     URL_MODE_DIRECT: "Direct podcast URL",
     URL_MODE_SIGNED_PROXY: "Signed Home Assistant proxy URL",
@@ -101,6 +102,15 @@ def feed_select_options(feeds: list[dict[str, Any]]) -> dict[str, str]:
         if feed_id:
             choices[str(feed_id)] = str(feed.get("title") or feed_id)
     return choices
+
+
+def _config_flow_feed_error(err: PodcastParseError) -> str:
+    """Map feed probe failures to config flow translation keys."""
+    if err.code == "invalid_url":
+        return "invalid_url"
+    if err.code in CONNECTIVITY_FEED_ERROR_CODES:
+        return "cannot_connect"
+    return "cannot_add_feed"
 
 
 def _settings_schema(options: dict[str, Any], *, include_initial_feed: bool = False, feeds: list[dict[str, Any]] | None = None) -> vol.Schema:
@@ -165,18 +175,28 @@ class PodcastPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             options = options_from_user_input(user_input)
             data = {}
             if user_input.get(CONF_INITIAL_RSS_URL):
-                data[CONF_INITIAL_RSS_URL] = user_input[CONF_INITIAL_RSS_URL]
-            return self.async_create_entry(title=NAME, data=data, options=options)
+                try:
+                    await async_validate_feed_url(self.hass, user_input[CONF_INITIAL_RSS_URL])
+                except PodcastParseError as err:
+                    errors[CONF_INITIAL_RSS_URL] = _config_flow_feed_error(err)
+                except Exception:  # noqa: BLE001 - config flow must return a clean form error
+                    _LOGGER.exception("Unexpected error while validating initial podcast feed")
+                    errors[CONF_INITIAL_RSS_URL] = "cannot_add_feed"
+                else:
+                    data[CONF_INITIAL_RSS_URL] = user_input[CONF_INITIAL_RSS_URL]
+            if not errors:
+                return self.async_create_entry(title=NAME, data=data, options=options)
 
         return self.async_show_form(
             step_id="user",
             data_schema=_settings_schema(default_options(), include_initial_feed=True),
-            errors={},
+            errors=errors,
         )
 
 

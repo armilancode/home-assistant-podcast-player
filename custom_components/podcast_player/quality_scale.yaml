@@ -33,12 +33,8 @@ rules:
   entity-unique-id: done
   has-entity-name: done
   runtime-data: done
-  test-before-configure:
-    status: todo
-    comment: Validate feed setup behavior before accepting user-provided feed data.
-  test-before-setup:
-    status: todo
-    comment: Add setup tests that prove stored configuration can be initialized or retried cleanly.
+  test-before-configure: done
+  test-before-setup: done
   unique-config-entry: done
 
   # Silver

@@ -8,7 +8,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
@@ -45,6 +45,8 @@ from .feed_parser import PodcastParseError
 from .storage import PodcastStorage, make_feed_id, normalize_rss_url
 
 _LOGGER = logging.getLogger(__name__)
+
+INITIAL_FEED_RETRY_ERROR_CODES = {"cannot_connect", "http_error", "redirect_loop", "ssl_error", "timeout"}
 
 # Home Assistant service targets are exposed as data["entity_id"] for these
 # custom services. Feed-selecting services use podcast feed sensor entities as
@@ -124,12 +126,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_initialize()
 
     runtime = PodcastRuntime(storage=storage, coordinator=coordinator)
+    await _async_import_initial_feed(hass, entry, runtime)
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
     entry.runtime_data = runtime
 
     async_register_api(hass)
-
-    await _async_import_initial_feed(hass, entry, runtime)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -150,16 +152,22 @@ async def _async_import_initial_feed(hass: HomeAssistant, entry: ConfigEntry, ru
 
     try:
         normalized_url = normalize_rss_url(initial_rss_url)
-        feed_id = make_feed_id(normalized_url)
-        if not runtime.storage.get_feed(feed_id):
+    except ValueError as err:
+        raise ConfigEntryError(f"Could not add initial podcast feed: {err}") from err
+
+    feed_id = make_feed_id(normalized_url)
+    if not runtime.storage.get_feed(feed_id):
+        try:
             await runtime.coordinator.async_add_feed(normalized_url)
-    except (PodcastParseError, ValueError) as err:
-        message = err.message if isinstance(err, PodcastParseError) else str(err)
-        _LOGGER.warning("Could not add initial podcast feed: %s", message)
-    finally:
-        data = dict(entry.data)
-        data.pop(CONF_INITIAL_RSS_URL, None)
-        hass.config_entries.async_update_entry(entry, data=data)
+        except PodcastParseError as err:
+            message = f"Could not add initial podcast feed: {err.message}"
+            if err.code in INITIAL_FEED_RETRY_ERROR_CODES:
+                raise ConfigEntryNotReady(message) from err
+            raise ConfigEntryError(message) from err
+
+    data = dict(entry.data)
+    data.pop(CONF_INITIAL_RSS_URL, None)
+    hass.config_entries.async_update_entry(entry, data=data)
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
