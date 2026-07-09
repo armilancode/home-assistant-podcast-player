@@ -1,10 +1,15 @@
 """Tests for Podcast Player signed proxy helpers."""
 
 import time
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 from custom_components.podcast_player.speaker_proxy import (
+    ensure_proxy_secret,
+    local_base_url,
+    make_signed_speaker_artwork_proxy_url,
     make_signed_speaker_proxy_path,
+    make_signed_speaker_proxy_url,
     sign_proxy_token,
     verify_proxy_token,
 )
@@ -21,6 +26,9 @@ def test_proxy_token_verification() -> None:
     assert not verify_proxy_token(secret, "other", str(expires), token)
     assert not verify_proxy_token(secret, episode_id, str(expires), "bad")
     assert not verify_proxy_token(secret, episode_id, str(int(time.time()) - 1), token)
+    assert not verify_proxy_token(secret, episode_id, None, token)
+    assert not verify_proxy_token(secret, episode_id, "not-an-int", token)
+    assert not verify_proxy_token(secret, episode_id, str(expires), None)
 
 
 def test_signed_proxy_path_contains_verifiable_token() -> None:
@@ -38,3 +46,39 @@ def test_signed_proxy_path_contains_verifiable_token() -> None:
         query["expires"][0],
         query["token"][0],
     )
+
+
+def test_proxy_secret_is_reused() -> None:
+    """Proxy signing secrets are created once and reused."""
+    settings = {}
+    secret = ensure_proxy_secret(settings)
+
+    assert secret
+    assert ensure_proxy_secret(settings) == secret
+
+
+def test_signed_proxy_urls_use_home_assistant_base_url() -> None:
+    """Absolute proxy URLs use the configured HA base URL."""
+    hass = SimpleNamespace(config=SimpleNamespace(internal_url="http://ha.example.test:8123", external_url=None))
+    settings = {"speaker_proxy_secret": "secret"}
+
+    audio = make_signed_speaker_proxy_url(hass, settings, "ep_123")
+    artwork = make_signed_speaker_artwork_proxy_url(hass, settings, "ep_123")
+
+    assert audio.startswith("http://ha.example.test:8123/api/podcast_player/speaker_proxy/ep_123?")
+    assert artwork.startswith("http://ha.example.test:8123/api/podcast_player/speaker_artwork/ep_123?")
+
+
+def test_local_base_url_falls_back_to_external_url() -> None:
+    """The helper falls back to configured external URL when internal URL is empty."""
+    hass = SimpleNamespace(config=SimpleNamespace(internal_url=None, external_url="https://ha.example.test/"))
+
+    assert local_base_url(hass) == "https://ha.example.test"
+
+
+def test_signed_proxy_url_returns_none_without_base_url() -> None:
+    """Absolute proxy URL builders return None when HA has no usable base URL."""
+    hass = SimpleNamespace(config=SimpleNamespace(internal_url=None, external_url=None))
+
+    assert make_signed_speaker_proxy_url(hass, {}, "ep_123") is None
+    assert make_signed_speaker_artwork_proxy_url(hass, {}, "ep_123") is None

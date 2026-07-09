@@ -43,7 +43,7 @@ rules:
     comment: This integration does not authenticate against an account or device API.
   test-coverage:
     status: todo
-    comment: Add measured coverage and raise integration module coverage above 95%.
+    comment: Coverage tooling is configured; raise integration coverage above 95%, with API and coordinator paths as the largest remaining gaps.
 
   # Gold
   devices: done
