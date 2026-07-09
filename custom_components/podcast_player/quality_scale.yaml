@@ -1,8 +1,6 @@
 rules:
   # Bronze
-  action-setup:
-    status: todo
-    comment: Service actions are currently registered from config entry setup; move registration to async_setup.
+  action-setup: done
   appropriate-polling: done
   brands:
     status: todo

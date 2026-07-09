@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 
 from .api import async_register_api
 from .const import (
@@ -106,6 +107,12 @@ SERVICE_MARK_EPISODE_SCHEMA = vol.Schema({vol.Required("episode_id"): cv.string}
 SERVICE_SET_SPEED_SCHEMA = vol.Schema({vol.Optional("entity_id"): _SERVICE_TARGET_ENTITY, vol.Required("speed"): vol.All(vol.Coerce(float), vol.In(ALLOWED_SPEEDS)), vol.Optional("episode_id"): cv.string})
 
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up Podcast Player integration."""
+    async_register_services(hass)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Podcast Player from a config entry."""
     storage = PodcastStorage(hass)
@@ -121,7 +128,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = runtime
 
     async_register_api(hass)
-    async_register_services(hass)
 
     await _async_import_initial_feed(hass, entry, runtime)
 
