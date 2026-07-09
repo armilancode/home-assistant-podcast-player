@@ -12,7 +12,7 @@ from uuid import uuid4
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -621,6 +621,15 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
 
+    def _known_episode_or_progress(self, episode_id: str) -> bool:
+        """Return true if an episode id is known in the library or progress history."""
+        player = self.storage.data["player"]
+        return bool(
+            self.storage.get_episode(episode_id)
+            or episode_id in self.storage.data["progress"]
+            or player.get("current_episode_id") == episode_id
+        )
+
     async def async_play_episode(self, episode_id: str) -> None:
         """Set current episode and state to browser playback.
 
@@ -628,7 +637,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         command never leaves an orphan TV/speaker session running.
         """
         if not self.storage.get_episode(episode_id):
-            raise ValueError("Unknown episode_id")
+            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
         player = self.storage.data["player"]
         session = self._external_session()
         previous_target = (
@@ -736,6 +745,8 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_seek(self, episode_id: str, position: float) -> None:
         """Seek current episode or speaker target when applicable."""
+        if not self._known_episode_or_progress(episode_id):
+            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
         player = self.storage.data["player"]
         if (
             player.get("output_mode") == "speaker"
@@ -770,6 +781,8 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         speed: float | None = None,
     ) -> None:
         """Save progress."""
+        if not self._known_episode_or_progress(episode_id):
+            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
         before = self.storage.get_progress(episode_id).get("played", False)
         progress = self.storage.save_progress(episode_id, position, duration, playing, speed)
         after = progress.get("played", False)
@@ -780,12 +793,16 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_mark_played(self, episode_id: str, played: bool) -> None:
         """Mark episode played/unplayed."""
+        if not self._known_episode_or_progress(episode_id):
+            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
         self.storage.mark_played(episode_id, played)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
 
     async def async_set_speed(self, speed: float, episode_id: str | None = None) -> None:
         """Set speed."""
+        if episode_id is not None and not self._known_episode_or_progress(episode_id):
+            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
         self.storage.set_speed(speed, episode_id)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -872,7 +889,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Mark the current episode played/unplayed."""
         episode_id = self.storage.data["player"].get("current_episode_id")
         if not episode_id:
-            return
+            raise HomeAssistantError("No current podcast episode to mark")
         await self.async_mark_played(episode_id, played)
 
     async def async_mark_feed_played(self, feed_id: str, played: bool = True) -> int:
@@ -1129,8 +1146,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session = self._external_session()
         target = media_player_entity_id or session.get("target_media_player") or player.get("target_media_player") or player.get("last_target_media_player")
         if not target:
-            _LOGGER.warning("Podcast Player stop requested, but no target media player is known")
-            return
+            raise HomeAssistantError("No podcast media player target is known to stop")
         target = str(target)
         if not self._is_external_media_player_entity_id(target):
             message = f"Target must be an external media_player entity: {target}"

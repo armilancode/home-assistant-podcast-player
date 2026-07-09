@@ -8,7 +8,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady, HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
@@ -221,7 +221,7 @@ def _target_contains_media_player(data: dict[str, Any]) -> bool:
 
 def _raise_media_player_target_help(service_hint: str) -> None:
     """Raise a clear error when an output media player was put in the wrong target field."""
-    raise HomeAssistantError(
+    raise ServiceValidationError(
         f"{service_hint}: action Target selects the podcast feed sensor. "
         "Put the output media player in data.media_player_entity_id instead. "
         "Example: target.entity_id = sensor.example_podcast_feed, "
@@ -250,7 +250,7 @@ def _media_player_entity_id_from_service(data: dict[str, Any]) -> str | None:
     if not media_targets:
         return None
     if len(media_targets) > 1:
-        raise HomeAssistantError("Select only one media_player target for this stop service")
+        raise ServiceValidationError("Select only one media_player target for this stop service")
     return media_targets[0]
 
 
@@ -273,9 +273,9 @@ def _feed_id_from_name(runtime: PodcastRuntime, feed_name: str | None) -> str | 
 
     if len(exact) > 1 or len(partial) > 1:
         names = ", ".join(str(feed.get("title") or feed.get("feed_id")) for feed in (exact or partial)[:5])
-        raise HomeAssistantError(f"Podcast feed name is ambiguous: {feed_name}. Matches: {names}")
+        raise ServiceValidationError(f"Podcast feed name is ambiguous: {feed_name}. Matches: {names}")
 
-    raise HomeAssistantError(f"Podcast feed not found by name: {feed_name}")
+    raise ServiceValidationError(f"Podcast feed not found by name: {feed_name}")
 
 
 def _feed_ids_from_service(runtime: PodcastRuntime, data: dict[str, Any], *, service_hint: str = "Podcast Player service") -> list[str]:
@@ -308,7 +308,7 @@ def _feed_ids_from_service(runtime: PodcastRuntime, data: dict[str, Any], *, ser
             continue
         if entity_id.startswith("media_player."):
             _raise_media_player_target_help(service_hint)
-        raise HomeAssistantError(f"Target {entity_id} is not a Podcast Player feed sensor")
+        raise ServiceValidationError(f"Target {entity_id} is not a Podcast Player feed sensor")
 
     if feed_ids:
         return feed_ids
@@ -316,7 +316,7 @@ def _feed_ids_from_service(runtime: PodcastRuntime, data: dict[str, Any], *, ser
     feed_id = data.get("feed_id")
     if feed_id and feed_id != "all":
         if not runtime.storage.get_feed(feed_id):
-            raise HomeAssistantError(f"Podcast feed not found: {feed_id}")
+            raise ServiceValidationError(f"Podcast feed not found: {feed_id}")
         return [feed_id]
 
     feed_name_id = _feed_id_from_name(runtime, data.get("feed_name"))
@@ -409,7 +409,9 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def remove_feed(call: ServiceCall) -> None:
         runtime = _runtime(hass)
-        await runtime.coordinator.async_remove_feed(call.data["feed_id"], call.data.get("keep_history", True))
+        removed = await runtime.coordinator.async_remove_feed(call.data["feed_id"], call.data.get("keep_history", True))
+        if not removed:
+            raise ServiceValidationError(f"Podcast feed not found: {call.data['feed_id']}")
 
     async def refresh(call: ServiceCall) -> None:
         runtime = _runtime(hass)
@@ -480,7 +482,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         data = dict(call.data)
         feed_ids = _feed_ids_from_service(runtime, data, service_hint="mark_feed_played")
         if not feed_ids:
-            raise HomeAssistantError("Select a Podcast feed target, or provide feed_id/feed_name")
+            raise ServiceValidationError("Select a Podcast feed target, or provide feed_id/feed_name")
         for feed_id in feed_ids:
             await runtime.coordinator.async_mark_feed_played(feed_id, data.get("played", True))
 
