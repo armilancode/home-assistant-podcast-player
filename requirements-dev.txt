@@ -1,4 +1,5 @@
 homeassistant==2026.6.4
+async-upnp-client
 feedparser==6.0.11
 pytest
 pytest-homeassistant-custom-component

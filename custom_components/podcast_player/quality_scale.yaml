@@ -6,9 +6,7 @@ rules:
     status: todo
     comment: Add Home Assistant brands assets before core submission.
   common-modules: done
-  config-flow-test-coverage:
-    status: todo
-    comment: Add full Home Assistant config flow tests, including create, abort, validation, and options paths.
+  config-flow-test-coverage: done
   config-flow: done
   dependency-transparency: done
   docs-actions:
