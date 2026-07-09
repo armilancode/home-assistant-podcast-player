@@ -14,6 +14,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
 from .entity import podcast_player_device_info
 
+PARALLEL_UPDATES = 0
+
 
 def _feed_sort_key(feed: dict[str, Any]) -> tuple[str, str]:
     """Return a stable sort key for feed entities."""
@@ -117,7 +119,7 @@ class PodcastFeedSensor(PodcastBaseSensor):
     @property
     def available(self) -> bool:
         feed = self._feed()
-        return bool(feed and feed.get("enabled", True))
+        return super().available and bool(feed and feed.get("enabled", True))
 
     @property
     def native_value(self) -> int | None:

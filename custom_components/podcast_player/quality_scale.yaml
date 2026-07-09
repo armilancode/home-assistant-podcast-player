@@ -36,16 +36,12 @@ rules:
   config-entry-unloading: done
   docs-configuration-parameters: done
   docs-installation-parameters: done
-  entity-unavailable:
-    status: todo
-    comment: Audit entities for correct availability when feeds, playback targets, or stored data are unavailable.
+  entity-unavailable: done
   integration-owner: done
   log-when-unavailable:
     status: todo
     comment: Ensure feed/network failures log once when unavailable and once when recovered.
-  parallel-updates:
-    status: todo
-    comment: Add platform PARALLEL_UPDATES declarations where required.
+  parallel-updates: done
   reauthentication-flow:
     status: exempt
     comment: This integration does not authenticate against an account or device API.

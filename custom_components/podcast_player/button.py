@@ -11,6 +11,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
 from .entity import podcast_player_device_info
 
+PARALLEL_UPDATES = 1
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     """Set up buttons."""
