@@ -225,6 +225,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Refresh one already stored feed."""
         feed_id = feed["feed_id"]
         rss_url = feed["rss_url"]
+        was_failed = feed.get("status") == "failed"
         try:
             result = await self._async_refresh_single_url(feed_id, rss_url)
             result["feed"]["last_refresh"] = utcnow_iso()
@@ -232,19 +233,37 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result["feed"]["canonical_url"] = result.get("canonical_url")
             self.storage.upsert_feed(result["feed"])
             new_episodes = self.storage.upsert_episodes(feed_id, result["episodes"])
+            if was_failed:
+                self._log_feed_available(feed)
             self._fire_new_episode_events(new_episodes)
         except PodcastParseError as err:
+            self._log_feed_unavailable(feed, err.message)
             self.storage.mark_feed_failed(feed_id, err.code, err.message)
             self.hass.bus.async_fire(
                 EVENT_FEED_REFRESH_FAILED,
                 {"feed_id": feed_id, "code": err.code, "message": err.message},
             )
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            self._log_feed_unavailable(feed, str(err))
             self.storage.mark_feed_failed(feed_id, "cannot_connect", str(err))
             self.hass.bus.async_fire(
                 EVENT_FEED_REFRESH_FAILED,
                 {"feed_id": feed_id, "code": "cannot_connect", "message": str(err)},
             )
+
+    def _feed_log_name(self, feed: dict[str, Any]) -> str:
+        """Return a stable feed name for log messages."""
+        return str(feed.get("title") or feed.get("feed_id") or "unknown feed")
+
+    def _log_feed_unavailable(self, feed: dict[str, Any], message: str) -> None:
+        """Log once when a feed becomes unavailable."""
+        if feed.get("status") == "failed":
+            return
+        _LOGGER.info("Podcast feed %s is unavailable: %s", self._feed_log_name(feed), message)
+
+    def _log_feed_available(self, feed: dict[str, Any]) -> None:
+        """Log once when a feed recovers."""
+        _LOGGER.info("Podcast feed %s is back online", self._feed_log_name(feed))
 
     async def _async_refresh_single_url(self, feed_id: str, rss_url: str) -> dict[str, Any]:
         """Fetch and parse a feed URL."""
