@@ -290,6 +290,28 @@ async def test_media_player_entity_reports_status_and_ignores_native_controls() 
     assert await entity.async_media_previous_track() is None
 
 
+def test_media_player_entity_fallback_artwork_and_adjacent_episode() -> None:
+    """Media player status helpers handle missing artwork and adjacent episode lookup."""
+    coordinator = FakeCoordinator()
+    entity = PodcastPlayerEntity(coordinator)
+
+    coordinator.storage.data["episodes"]["episode_1"].pop("artwork_url")
+    assert entity.media_image_url == "https://example.test/feed.jpg"
+
+    coordinator.storage.data["episodes"]["episode_2"] = {
+        "episode_id": "episode_2",
+        "feed_id": "feed_1",
+        "title": "Episode Two",
+        "published": "2026-01-03T00:00:00+00:00",
+        "duration_seconds": 0,
+    }
+    assert entity._adjacent_episode(1)["episode_id"] == "episode_2"
+
+    coordinator.storage.data["player"]["current_episode_id"] = "missing"
+    assert entity._adjacent_episode(1)["episode_id"] == "episode_1"
+    assert entity._progress_percent({"position": 10, "duration": 0}, {}) == 0
+
+
 async def test_media_player_platform_setup() -> None:
     """Media player platform setup creates the status entity."""
     coordinator = FakeCoordinator()
