@@ -1,0 +1,146 @@
+rules:
+  # Bronze
+  action-setup:
+    status: todo
+    comment: Service actions are currently registered from config entry setup; move registration to async_setup.
+  appropriate-polling: done
+  brands:
+    status: todo
+    comment: Add Home Assistant brands assets before core submission.
+  common-modules: done
+  config-flow-test-coverage:
+    status: todo
+    comment: Add full Home Assistant config flow tests, including create, abort, validation, and options paths.
+  config-flow: done
+  dependency-transparency: done
+  docs-actions:
+    status: todo
+    comment: Document all provided actions with examples.
+  docs-conditions:
+    status: exempt
+    comment: This integration does not provide conditions.
+  docs-high-level-description:
+    status: todo
+    comment: Replace alpha repository documentation with end-user documentation suitable for Home Assistant.
+  docs-installation-instructions:
+    status: todo
+    comment: Document installation and setup steps for the supported distribution path.
+  docs-removal-instructions:
+    status: todo
+    comment: Document removal behavior and any stored data the user may want to clear.
+  docs-triggers:
+    status: exempt
+    comment: This integration does not provide triggers.
+  entity-event-setup:
+    status: exempt
+    comment: Entities do not subscribe to external event callbacks directly.
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure:
+    status: todo
+    comment: Validate feed setup behavior before accepting user-provided feed data.
+  test-before-setup:
+    status: todo
+    comment: Add setup tests that prove stored configuration can be initialized or retried cleanly.
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions:
+    status: todo
+    comment: Audit every action path for translated, user-actionable HomeAssistantError failures.
+  config-entry-unloading: done
+  docs-configuration-parameters:
+    status: todo
+    comment: Document all integration options.
+  docs-installation-parameters:
+    status: todo
+    comment: Document setup form fields and accepted values.
+  entity-unavailable:
+    status: todo
+    comment: Audit entities for correct availability when feeds, playback targets, or stored data are unavailable.
+  integration-owner: done
+  log-when-unavailable:
+    status: todo
+    comment: Ensure feed/network failures log once when unavailable and once when recovered.
+  parallel-updates:
+    status: todo
+    comment: Add platform PARALLEL_UPDATES declarations where required.
+  reauthentication-flow:
+    status: exempt
+    comment: This integration does not authenticate against an account or device API.
+  test-coverage:
+    status: todo
+    comment: Add measured coverage and raise integration module coverage above 95%.
+
+  # Gold
+  devices: done
+  diagnostics:
+    status: todo
+    comment: Implement downloadable diagnostics with sensitive data redaction.
+  discovery-update-info:
+    status: exempt
+    comment: This integration does not use discovery.
+  discovery:
+    status: exempt
+    comment: Podcast feeds are added by the user and are not discoverable on the network.
+  docs-data-update:
+    status: todo
+    comment: Document RSS refresh behavior, limits, and failure handling.
+  docs-examples:
+    status: todo
+    comment: Add automation and dashboard examples.
+  docs-known-limitations:
+    status: todo
+    comment: Document known limitations, especially target media player playback behavior.
+  docs-supported-devices:
+    status: todo
+    comment: Document supported and unsupported media player target behavior.
+  docs-supported-functions:
+    status: todo
+    comment: Document provided platforms, entities, media source support, and actions.
+  docs-troubleshooting:
+    status: todo
+    comment: Add troubleshooting steps for feed parsing, proxy playback, and media player target failures.
+  docs-use-cases:
+    status: todo
+    comment: Add end-user use cases.
+  dynamic-devices:
+    status: exempt
+    comment: Podcast feeds are dynamic entities, not device registry devices.
+  entity-category:
+    status: todo
+    comment: Audit entity categories for every entity.
+  entity-device-class:
+    status: todo
+    comment: Audit device classes and state classes for all eligible sensors.
+  entity-disabled-by-default: done
+  entity-translations:
+    status: todo
+    comment: Move entity names to translation keys.
+  exception-translations:
+    status: todo
+    comment: Move user-facing exception messages to translation keys.
+  icon-translations:
+    status: todo
+    comment: Move entity icons to icon translations where appropriate.
+  reconfiguration-flow:
+    status: todo
+    comment: Add a dedicated reconfigure flow for existing entries.
+  repair-issues:
+    status: todo
+    comment: Add repair issues for user intervention cases.
+  stale-devices:
+    status: exempt
+    comment: The integration has one static device registry device and dynamic feed entities.
+
+  # Platinum
+  async-dependency:
+    status: todo
+    comment: Replace or isolate synchronous feed parsing so dependency usage satisfies async requirements.
+  inject-websession:
+    status: exempt
+    comment: Network I/O uses Home Assistant aiohttp sessions directly; the parser dependency performs no HTTP I/O.
+  strict-typing:
+    status: todo
+    comment: Add strict typing and resolve all typing issues.
