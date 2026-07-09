@@ -226,11 +226,23 @@ async def test_platform_setup_and_button_presses() -> None:
     """Platform setup creates entities and buttons call coordinator actions."""
     coordinator = FakeCoordinator()
     entry = FakeEntry(coordinator)
+    coordinator.storage.data["feeds"]["missing_id"] = {"title": "Missing ID", "enabled": True}
 
     added = []
     await sensor.async_setup_entry(None, entry, added.extend)
     assert any(isinstance(entity, PodcastFeedSensor) for entity in added)
     assert entry.unloads
+
+    coordinator.storage.data["feeds"]["feed_2"] = {
+        "feed_id": "feed_2",
+        "rss_url": "https://example.test/feed-2.xml",
+        "title": "Second Feed",
+        "enabled": True,
+    }
+    feed_entity_count = sum(isinstance(entity, PodcastFeedSensor) for entity in added)
+    coordinator.listeners[0]()
+    coordinator.listeners[0]()
+    assert sum(isinstance(entity, PodcastFeedSensor) for entity in added) == feed_entity_count + 1
 
     binary_added = []
     await binary_sensor.async_setup_entry(None, entry, binary_added.extend)
@@ -260,6 +272,30 @@ def test_binary_sensors_report_state() -> None:
 
     assert IsPlayingBinarySensor(coordinator).is_on is True
     assert HasUnplayedBinarySensor(coordinator).is_on is True
+
+
+def test_sensor_edge_states_report_empty_values() -> None:
+    """Sensors handle missing feeds, no current episode, and empty latest summaries."""
+    coordinator = FakeCoordinator()
+    coordinator.storage.data["player"]["current_episode_id"] = None
+    coordinator.storage.data["player"]["current_feed_id"] = None
+    coordinator.storage.data["player"]["position"] = 0
+    coordinator.storage.data["player"]["duration"] = None
+    coordinator.latest_episode = lambda *args, **kwargs: None
+
+    missing_feed = PodcastFeedSensor(coordinator, "missing")
+    assert missing_feed.available is False
+    assert missing_feed.native_value is None
+
+    assert LatestEpisodeSensor(coordinator).native_value is None
+    assert LatestEpisodeSensor(coordinator).extra_state_attributes == {}
+    assert CurrentFeedSensor(coordinator).native_value is None
+    assert CurrentEpisodeSensor(coordinator).native_value is None
+    assert CurrentEpisodeSensor(coordinator).extra_state_attributes["played"] is None
+    assert CurrentDurationSensor(coordinator).native_value is None
+    assert CurrentProgressSensor(coordinator).native_value == 0
+    assert LatestByFeedSensor(coordinator).native_value == 0
+    assert LatestByFeedSensor(coordinator).extra_state_attributes == {"items": []}
 
 
 async def test_media_player_entity_reports_status_and_ignores_native_controls() -> None:

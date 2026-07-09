@@ -3,6 +3,7 @@
 import time
 from types import SimpleNamespace
 
+import aiohttp
 import pytest
 
 from custom_components.podcast_player.api import (
@@ -151,6 +152,86 @@ class FakeConnection:
         self.errors.append((msg_id, code, message))
 
 
+class FakeContent:
+    """Minimal aiohttp stream content replacement."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def iter_chunked(self, size: int):
+        """Yield configured chunks."""
+        for chunk in self._chunks:
+            yield chunk
+
+
+class FakeUpstream:
+    """Minimal aiohttp upstream response replacement."""
+
+    def __init__(self, *, status: int = 200, headers: dict[str, str] | None = None, chunks: list[bytes] | None = None) -> None:
+        self.status = status
+        self.headers = headers or {}
+        self.content = FakeContent(chunks or [])
+
+    async def __aenter__(self) -> "FakeUpstream":
+        """Enter response context."""
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        """Exit response context."""
+
+
+class FakeSession:
+    """Minimal aiohttp client session replacement."""
+
+    def __init__(
+        self,
+        *,
+        head_response: FakeUpstream | Exception | None = None,
+        get_response: FakeUpstream | Exception | None = None,
+    ) -> None:
+        self.head_response = head_response
+        self.get_response = get_response
+        self.head_calls: list[tuple[str, dict]] = []
+        self.get_calls: list[tuple[str, dict]] = []
+
+    async def head(self, url: str, **kwargs):
+        """Return configured HEAD response."""
+        self.head_calls.append((url, kwargs))
+        if isinstance(self.head_response, Exception):
+            raise self.head_response
+        return self.head_response
+
+    async def get(self, url: str, **kwargs):
+        """Return configured GET response."""
+        self.get_calls.append((url, kwargs))
+        if isinstance(self.get_response, Exception):
+            raise self.get_response
+        return self.get_response
+
+
+class FakeStreamResponse:
+    """Minimal aiohttp StreamResponse replacement."""
+
+    def __init__(self, *, status: int, headers: dict[str, str]) -> None:
+        self.status = status
+        self.headers = headers
+        self.prepared_request = None
+        self.chunks: list[bytes] = []
+        self.eof = False
+
+    async def prepare(self, request) -> None:
+        """Record prepared request."""
+        self.prepared_request = request
+
+    async def write(self, chunk: bytes) -> None:
+        """Record written chunks."""
+        self.chunks.append(chunk)
+
+    async def write_eof(self) -> None:
+        """Record EOF."""
+        self.eof = True
+
+
 def _media_state(entity_id: str, state: str, name: str, features: int = 0) -> SimpleNamespace:
     """Build a minimal HA state object."""
     return SimpleNamespace(
@@ -179,9 +260,15 @@ def _hass(runtime: SimpleNamespace | None = None, states: FakeStates | None = No
     return SimpleNamespace(data=data, states=states or FakeStates([]), http=FakeHttp())
 
 
-def _request(hass: SimpleNamespace, *, method: str = "GET", query: dict[str, str] | None = None) -> SimpleNamespace:
+def _request(
+    hass: SimpleNamespace,
+    *,
+    method: str = "GET",
+    query: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> SimpleNamespace:
     """Return a minimal aiohttp request object for early proxy paths."""
-    return SimpleNamespace(app={"hass": hass}, method=method, query=query or {}, headers={})
+    return SimpleNamespace(app={"hass": hass}, method=method, query=query or {}, headers=headers or {})
 
 
 def _seed_library(storage: PodcastStorage) -> None:
@@ -420,6 +507,138 @@ async def test_audio_proxy_early_error_paths() -> None:
 
 
 @pytest.mark.asyncio
+async def test_audio_proxy_head_uses_upstream_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audio HEAD proxy returns upstream media probe headers when available."""
+    storage = _storage()
+    storage.data["episodes"]["ep_1"] = {
+        "episode_id": "ep_1",
+        "feed_id": "feed_1",
+        "audio_url": "https://cdn.example.test/ep_1.mp3",
+        "audio_type": "audio/aac",
+    }
+    hass = _hass(_runtime(storage))
+    session = FakeSession(
+        head_response=FakeUpstream(
+            status=206,
+            headers={
+                "Content-Type": "audio/aac",
+                "Content-Length": "123",
+                "Content-Range": "bytes 0-122/123",
+                "ETag": "abc",
+                "X-Ignored": "ignored",
+            },
+        )
+    )
+    monkeypatch.setattr("custom_components.podcast_player.api.async_get_clientsession", lambda hass: session)
+
+    response = await _proxy_episode_audio(_request(hass, method="HEAD"), "ep_1", require_signed_token=False)
+
+    assert response.status == 206
+    assert response.headers["Content-Type"] == "audio/aac"
+    assert response.headers["Content-Length"] == "123"
+    assert response.headers["Content-Range"] == "bytes 0-122/123"
+    assert response.headers["ETag"] == "abc"
+    assert "X-Ignored" not in response.headers
+    assert session.head_calls[0][0] == "https://cdn.example.test/ep_1.mp3"
+
+
+@pytest.mark.asyncio
+async def test_audio_proxy_head_falls_back_for_failed_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audio HEAD proxy returns conservative success for failed upstream probes."""
+    storage = _storage()
+    storage.data["episodes"]["ep_1"] = {
+        "episode_id": "ep_1",
+        "feed_id": "feed_1",
+        "audio_url": "https://cdn.example.test/ep_1.mp3",
+        "audio_type": "audio/aac",
+    }
+    hass = _hass(_runtime(storage))
+    monkeypatch.setattr(
+        "custom_components.podcast_player.api.async_get_clientsession",
+        lambda hass: FakeSession(head_response=aiohttp.ClientError("offline")),
+    )
+
+    response = await _proxy_episode_audio(_request(hass, method="HEAD"), "ep_1", require_signed_token=False)
+
+    assert response.status == 200
+    assert response.headers["Content-Type"] == "audio/aac"
+    assert response.headers["Accept-Ranges"] == "bytes"
+
+    monkeypatch.setattr(
+        "custom_components.podcast_player.api.async_get_clientsession",
+        lambda hass: FakeSession(head_response=FakeUpstream(status=404)),
+    )
+    response = await _proxy_episode_audio(_request(hass, method="HEAD"), "ep_1", require_signed_token=False)
+
+    assert response.status == 200
+
+
+@pytest.mark.asyncio
+async def test_audio_proxy_get_streams_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audio GET proxy streams upstream chunks and forwards range requests."""
+    storage = _storage()
+    storage.data["episodes"]["ep_1"] = {
+        "episode_id": "ep_1",
+        "feed_id": "feed_1",
+        "audio_url": "https://cdn.example.test/ep_1.mp3",
+        "audio_type": "audio/mpeg",
+    }
+    hass = _hass(_runtime(storage))
+    session = FakeSession(
+        get_response=FakeUpstream(
+            status=206,
+            headers={
+                "Content-Type": "audio/mpeg",
+                "Accept-Ranges": "bytes",
+                "Content-Length": "6",
+            },
+            chunks=[b"abc", b"def"],
+        )
+    )
+    monkeypatch.setattr("custom_components.podcast_player.api.async_get_clientsession", lambda hass: session)
+    monkeypatch.setattr("custom_components.podcast_player.api.web.StreamResponse", FakeStreamResponse)
+
+    response = await _proxy_episode_audio(
+        _request(hass, headers={"Range": "bytes=0-5"}),
+        "ep_1",
+        require_signed_token=False,
+    )
+
+    assert response.status == 206
+    assert response.headers["Content-Length"] == "6"
+    assert response.chunks == [b"abc", b"def"]
+    assert response.eof is True
+    assert session.get_calls[0][1]["headers"]["Range"] == "bytes=0-5"
+
+
+@pytest.mark.asyncio
+async def test_audio_proxy_get_reports_upstream_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audio GET proxy reports connection and upstream HTTP failures."""
+    storage = _storage()
+    storage.data["episodes"]["ep_1"] = {
+        "episode_id": "ep_1",
+        "feed_id": "feed_1",
+        "audio_url": "https://cdn.example.test/ep_1.mp3",
+    }
+    hass = _hass(_runtime(storage))
+    monkeypatch.setattr(
+        "custom_components.podcast_player.api.async_get_clientsession",
+        lambda hass: FakeSession(get_response=aiohttp.ClientError("offline")),
+    )
+
+    assert (await _proxy_episode_audio(_request(hass), "ep_1", require_signed_token=False)).status == 502
+
+    monkeypatch.setattr(
+        "custom_components.podcast_player.api.async_get_clientsession",
+        lambda hass: FakeSession(get_response=FakeUpstream(status=503)),
+    )
+
+    response = await _proxy_episode_audio(_request(hass), "ep_1", require_signed_token=False)
+
+    assert response.status == 503
+
+
+@pytest.mark.asyncio
 async def test_audio_proxy_views_delegate_to_helper() -> None:
     """HTTP audio proxy views delegate GET and HEAD requests to the helper."""
     request = _request(_hass())
@@ -468,6 +687,75 @@ async def test_artwork_proxy_view_delegates_to_helper() -> None:
 
     assert (await PodcastSpeakerArtworkProxyView().get(request, "ep_1")).status == 404
     assert (await PodcastSpeakerArtworkProxyView().head(request, "ep_1")).status == 404
+
+
+@pytest.mark.asyncio
+async def test_artwork_proxy_get_streams_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Artwork GET proxy streams image chunks and copies safe headers."""
+    storage = _storage()
+    storage.data["settings"]["speaker_proxy_secret"] = "secret-value"
+    storage.data["episodes"]["ep_1"] = {
+        "episode_id": "ep_1",
+        "feed_id": "feed_1",
+        "artwork_url": "https://cdn.example.test/ep_1.jpg",
+    }
+    hass = _hass(_runtime(storage))
+    session = FakeSession(
+        get_response=FakeUpstream(
+            headers={
+                "Content-Type": "image/png",
+                "Content-Length": "6",
+                "ETag": "abc",
+            },
+            chunks=[b"123", b"456"],
+        )
+    )
+    monkeypatch.setattr("custom_components.podcast_player.api.async_get_clientsession", lambda hass: session)
+    monkeypatch.setattr("custom_components.podcast_player.api.web.StreamResponse", FakeStreamResponse)
+
+    response = await _proxy_episode_artwork(
+        _request(hass, query=_signed_query("secret-value", "ep_1")),
+        "ep_1",
+    )
+
+    assert response.status == 200
+    assert response.headers["Content-Type"] == "image/png"
+    assert response.headers["Content-Length"] == "6"
+    assert response.headers["ETag"] == "abc"
+    assert response.headers["Cache-Control"] == "public, max-age=86400"
+    assert response.chunks == [b"123", b"456"]
+    assert response.eof is True
+    assert session.get_calls[0][0] == "https://cdn.example.test/ep_1.jpg"
+    assert session.get_calls[0][1]["headers"]["Accept"].startswith("image/")
+
+
+@pytest.mark.asyncio
+async def test_artwork_proxy_get_reports_upstream_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Artwork GET proxy reports connection and upstream HTTP failures."""
+    storage = _storage()
+    storage.data["settings"]["speaker_proxy_secret"] = "secret-value"
+    storage.data["episodes"]["ep_1"] = {
+        "episode_id": "ep_1",
+        "feed_id": "feed_1",
+        "artwork_url": "https://cdn.example.test/ep_1.jpg",
+    }
+    hass = _hass(_runtime(storage))
+    query = _signed_query("secret-value", "ep_1")
+    monkeypatch.setattr(
+        "custom_components.podcast_player.api.async_get_clientsession",
+        lambda hass: FakeSession(get_response=aiohttp.ClientError("offline")),
+    )
+
+    assert (await _proxy_episode_artwork(_request(hass, query=query), "ep_1")).status == 502
+
+    monkeypatch.setattr(
+        "custom_components.podcast_player.api.async_get_clientsession",
+        lambda hass: FakeSession(get_response=FakeUpstream(status=404)),
+    )
+
+    response = await _proxy_episode_artwork(_request(hass, query=query), "ep_1")
+
+    assert response.status == 404
 
 
 def test_episode_artwork_url_prefers_episode_then_feed() -> None:

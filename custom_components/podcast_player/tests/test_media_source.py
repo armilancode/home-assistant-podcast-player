@@ -6,15 +6,24 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from async_upnp_client.profiles.dlna import didl_lite
-from homeassistant.components.media_player import MediaClass, MediaType
+from homeassistant.components.media_player import BrowseError, MediaClass, MediaType
 from homeassistant.components.media_source import Unresolvable
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.podcast_player.const import DOMAIN
 from custom_components.podcast_player.media_source import (
     PodcastMediaSource,
+    _clean_didl_text,
+    _didl_metadata_for_target,
     _duration_label,
+    _episode_display_title,
     _parts,
+    _target_prefers_proxy,
+    async_get_media_source,
     media_source_id_for_episode,
+)
+from custom_components.podcast_player.media_source import (
+    _runtime as media_source_runtime,
 )
 from custom_components.podcast_player.speaker_proxy import verify_proxy_token
 from custom_components.podcast_player.storage import default_data
@@ -55,7 +64,7 @@ class FakeCoordinator:
     def active_episodes(self, feed_id: str | None = None, *, feed_ids: set[str] | None = None) -> list[dict]:
         """Return active episodes sorted newest first."""
         allowed_feed_ids = {feed_id} if feed_id else {
-            feed["feed_id"] for feed in self.storage.enabled_feeds()
+            feed["feed_id"] for feed in self.storage.enabled_feeds() if feed.get("feed_id")
         }
         if feed_ids:
             allowed_feed_ids &= feed_ids
@@ -140,6 +149,17 @@ def _add_episode(
     }
 
 
+def test_media_source_runtime_lookup_and_async_factory() -> None:
+    """Media source factory returns a Podcast media source and runtime lookup is optional."""
+    empty_hass = SimpleNamespace(data={})
+    runtime = _runtime()
+    hass = SimpleNamespace(data={DOMAIN: {"entry": runtime}})
+
+    assert media_source_runtime(empty_hass) is None
+    assert media_source_runtime(hass) is runtime
+    assert isinstance(asyncio.run(async_get_media_source(hass)), PodcastMediaSource)
+
+
 def test_media_source_identifier_parts() -> None:
     """Media source identifiers are normalized into path parts."""
     assert _parts(None) == []
@@ -156,8 +176,22 @@ def test_duration_label() -> None:
     """Durations are formatted compactly."""
     assert _duration_label(None) is None
     assert _duration_label(0) is None
+    assert _duration_label("bad") is None
     assert _duration_label(65) == "1:05"
     assert _duration_label(3665) == "1:01:05"
+
+
+def test_media_browser_title_helpers() -> None:
+    """Media browser title helpers handle fallback titles and optional metadata."""
+    assert _clean_didl_text("  text  ") == "text"
+    assert _clean_didl_text("") is None
+    assert _episode_display_title({}, {}, {}, include_feed_title=True) == "Untitled episode"
+    assert _episode_display_title(
+        {"title": "Episode", "duration_seconds": 61},
+        {"title": "Feed"},
+        {},
+        include_feed_title=True,
+    ) == "Episode — Feed (1:01)"
 
 
 def test_root_contains_categories_and_feeds_directory() -> None:
@@ -170,6 +204,37 @@ def test_root_contains_categories_and_feeds_directory() -> None:
     assert [child.identifier for child in root.children] == ["latest", "unplayed", "in_progress", "all", "feeds"]
     assert root.children[-1].title == "Feeds"
     assert root.children[-1].children_media_class == MediaClass.PODCAST
+
+
+def test_async_browse_media_routes_all_directory_paths() -> None:
+    """Async browse entrypoint routes root, category, feeds, and feed directories."""
+    runtime = _runtime()
+    _add_feed(runtime.storage, "feed_1", "Feed One")
+    _add_feed(runtime.storage, "feed_disabled", "Disabled", enabled=False)
+    runtime.storage.data["feeds"]["missing_id"] = {"title": "Missing ID", "enabled": True}
+    _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
+    source = _source(runtime)
+
+    root = asyncio.run(source.async_browse_media(_item(None)))
+    latest = asyncio.run(source.async_browse_media(_item("latest")))
+    feeds = asyncio.run(source.async_browse_media(_item("feeds")))
+    feed = asyncio.run(source.async_browse_media(_item("feed/feed_1")))
+    feed_unplayed = asyncio.run(source.async_browse_media(_item("feed/feed_1/unplayed")))
+
+    assert root.identifier is None
+    assert latest.identifier == "latest"
+    assert [(child.identifier, child.title) for child in feeds.children] == [("feed/feed_1", "Feed One")]
+    assert feed.identifier == "feed/feed_1"
+    assert feed.title == "Feed One"
+    assert feed_unplayed.identifier == "feed/feed_1/unplayed"
+    assert feed_unplayed.title == "Feed One: Unplayed episodes"
+
+    with pytest.raises(BrowseError, match="not configured"):
+        asyncio.run(PodcastMediaSource(SimpleNamespace(data={})).async_browse_media(_item(None)))
+    with pytest.raises(BrowseError, match="not found"):
+        asyncio.run(source.async_browse_media(_item("feed/feed_disabled")))
+    with pytest.raises(BrowseError, match="path"):
+        asyncio.run(source.async_browse_media(_item("feed/feed_1/unknown")))
 
 
 def test_feeds_directory_lists_enabled_feeds_sorted() -> None:
@@ -436,10 +501,31 @@ def test_resolve_unavailable_target_fails_before_play_media() -> None:
     assert runtime.coordinator.prepared_media_source_playback == []
 
 
+def test_resolve_target_prepare_error_becomes_unresolvable() -> None:
+    """Media source target preparation errors become clean resolve errors."""
+    runtime = _runtime()
+    _add_feed(runtime.storage, "feed_1", "Feed One")
+    _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
+
+    async def fail_prepare(**kwargs) -> None:
+        raise HomeAssistantError("Target rejected playback")
+
+    runtime.coordinator.async_prepare_media_source_playback = fail_prepare
+
+    with pytest.raises(Unresolvable, match="Target rejected playback"):
+        asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.speaker")))
+
+
 def test_resolve_missing_or_unplayable_episode_raises() -> None:
     """Missing and unplayable episodes fail clearly."""
     runtime = _runtime()
     source = _source(runtime)
+
+    with pytest.raises(Unresolvable, match="not configured"):
+        asyncio.run(PodcastMediaSource(SimpleNamespace(data={})).async_resolve_media(_item("episode/ep_1")))
+
+    with pytest.raises(Unresolvable, match="not playable"):
+        asyncio.run(source.async_resolve_media(_item("feed/feed_1")))
 
     with pytest.raises(Unresolvable):
         asyncio.run(source.async_resolve_media(_item("episode/missing")))
@@ -450,3 +536,36 @@ def test_resolve_missing_or_unplayable_episode_raises() -> None:
 
     with pytest.raises(Unresolvable):
         asyncio.run(source.async_resolve_media(_item("episode/ep_1")))
+
+
+def test_target_proxy_preference_and_didl_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DIDL metadata helper handles non-proxy targets and constructor failures."""
+    runtime = _runtime()
+    hass = SimpleNamespace(data={DOMAIN: {"entry": runtime}})
+
+    assert _target_prefers_proxy(None) is False
+    assert _target_prefers_proxy({"platform": "dlna_dmr", "capabilities": {}}) is True
+    assert _target_prefers_proxy({"capabilities": {"raw_avtransport": True}}) is True
+    assert _target_prefers_proxy({"capabilities": {"limited_controls": True}}) is True
+    assert _didl_metadata_for_target(hass, {}, "ep_1", {}, {}, "https://cdn.example.test/ep_1.mp3", "audio/mpeg", None) is None
+
+    monkeypatch.setattr("custom_components.podcast_player.media_source.make_signed_speaker_artwork_proxy_url", lambda *args: None)
+
+    class BrokenMusicTrack:
+        """MusicTrack replacement that fails construction."""
+
+        def __init__(self, **kwargs) -> None:
+            raise RuntimeError("bad metadata")
+
+    monkeypatch.setattr(didl_lite, "MusicTrack", BrokenMusicTrack)
+
+    assert _didl_metadata_for_target(
+        hass,
+        {},
+        "ep_1",
+        {"title": "Episode", "artwork_url": "https://cdn.example.test/ep_1.jpg"},
+        {"title": "Feed"},
+        "https://cdn.example.test/ep_1.mp3",
+        "audio/mpeg",
+        {"capabilities": {"limited_controls": True}},
+    ) is None

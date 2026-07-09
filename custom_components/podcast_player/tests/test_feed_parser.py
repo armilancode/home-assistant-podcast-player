@@ -64,9 +64,11 @@ def test_small_feed_parser_helpers() -> None:
     assert _parse_datetime("Thu, 25 Jun 2026 10:00:00 +0000") == "2026-06-25T10:00:00+00:00"
     assert _parse_datetime("Thu, 25 Jun 2026 10:00:00") == "2026-06-25T10:00:00+00:00"
     assert _parse_datetime("not-a-date") is None
+    assert _parse_datetime(12345) is None
 
     assert _duration_to_seconds(None) is None
     assert _duration_to_seconds("") is None
+    assert _duration_to_seconds("   ") is None
     assert _duration_to_seconds(12.9) == 12
     assert _duration_to_seconds("90") == 90
     assert _duration_to_seconds("01:02:03") == 3723
@@ -84,6 +86,18 @@ def test_image_helpers_read_common_feedparser_shapes() -> None:
     assert _image_from_obj({"media_thumbnail": [{"url": "https://example.test/thumb.jpg"}]}) == "https://example.test/thumb.jpg"
     assert _image_from_obj({"itunes_image": "https://example.test/itunes.jpg"}) == "https://example.test/itunes.jpg"
     assert _image_from_obj({"images": ["bad"], "media_thumbnail": ["bad"]}) is None
+    assert _image_from_obj(
+        {
+            "image": {"href": ""},
+            "images": [{"href": ""}, {"url": "https://example.test/second.jpg"}],
+        }
+    ) == "https://example.test/second.jpg"
+    assert _image_from_obj(
+        {
+            "media_thumbnail": [{"url": ""}],
+            "image_href": "https://example.test/fallback.jpg",
+        }
+    ) == "https://example.test/fallback.jpg"
 
 
 def test_audio_pick_helpers_accept_mime_types_and_extensions() -> None:
@@ -119,6 +133,14 @@ def test_audio_pick_helpers_accept_mime_types_and_extensions() -> None:
         "https://example.test/feed.xml",
     )["audio_url"] == "https://example.test/audio.ogg"
     assert _pick_audio({"enclosures": [{"href": ""}], "links": "bad"}, "https://example.test/feed.xml") is None
+    assert _pick_audio(
+        {
+            "enclosures": "bad",
+            "media_content": "bad",
+            "links": [None, {"href": "/clip.wav", "rel": "", "length": "321"}],
+        },
+        "https://example.test/feed.xml",
+    )["audio_url"] == "https://example.test/clip.wav"
 
 
 def test_parse_podcast_feed_uses_fallbacks_and_skips_bad_entries() -> None:

@@ -129,6 +129,47 @@ def test_async_load_repairs_missing_sections_and_external_session() -> None:
     assert storage._store.saved is storage.data
 
 
+def test_async_load_merges_existing_external_session_and_skips_unneeded_save() -> None:
+    """Current documents are not rewritten, while partial sessions are upgraded."""
+    class CurrentStore:
+        def __init__(self) -> None:
+            self.saved = None
+
+        async def async_load(self) -> dict:
+            return default_data()
+
+        async def async_save(self, data: dict) -> None:
+            self.saved = data
+
+    current = PodcastStorage.__new__(PodcastStorage)
+    current._store = CurrentStore()
+
+    asyncio.run(current.async_load())
+
+    assert current._store.saved is None
+
+    class PartialSessionStore:
+        def __init__(self) -> None:
+            self.saved = None
+
+        async def async_load(self) -> dict:
+            data = default_data()
+            data["player"]["external_session"] = {"active": True}
+            return data
+
+        async def async_save(self, data: dict) -> None:
+            self.saved = data
+
+    partial = PodcastStorage.__new__(PodcastStorage)
+    partial._store = PartialSessionStore()
+
+    asyncio.run(partial.async_load())
+
+    assert partial.data["player"]["external_session"]["active"] is True
+    assert "transport_state" in partial.data["player"]["external_session"]
+    assert partial._store.saved is partial.data
+
+
 def test_make_episode_id_uses_stable_fallbacks() -> None:
     """Episode IDs are stable across guid, audio, and fallback identity paths."""
     assert make_episode_id("feed", "guid", None, None, None).startswith("ep_")
@@ -197,6 +238,23 @@ def test_remove_feed_can_delete_history() -> None:
     assert "episode_1" not in storage.data["progress"]
 
 
+def test_trim_keeps_in_progress_old_episode() -> None:
+    """Episode trimming preserves old in-progress episodes."""
+    storage = PodcastStorage.__new__(PodcastStorage)
+    storage.data = default_data()
+    storage.data["settings"]["max_episodes_per_feed"] = 1
+
+    old_episode = {"episode_id": "old", "feed_id": "feed_1", "published": "2026-01-01T00:00:00+00:00"}
+    new_episode = {"episode_id": "new", "feed_id": "feed_1", "published": "2026-02-01T00:00:00+00:00"}
+    storage.upsert_episodes("feed_1", [old_episode])
+    storage.save_progress("old", 10, duration=100, playing=False)
+
+    storage.upsert_episodes("feed_1", [new_episode])
+
+    assert "old" in storage.data["episodes"]
+    assert "new" in storage.data["episodes"]
+
+
 def test_player_state_and_speed_updates() -> None:
     """Player state and speed helpers update expected fields and validate speed."""
     storage = PodcastStorage.__new__(PodcastStorage)
@@ -217,6 +275,23 @@ def test_player_state_and_speed_updates() -> None:
 
     with pytest.raises(ValueError, match="Unsupported playback speed"):
         storage.set_speed(9.0)
+
+
+def test_progress_and_speed_edge_inputs() -> None:
+    """Progress ignores invalid optional values and speed can update defaults only."""
+    storage = PodcastStorage.__new__(PodcastStorage)
+    storage.data = default_data()
+
+    progress = storage.save_progress("episode_1", 12, duration="bad", playing=None, speed=9.0)
+
+    assert progress["duration"] is None
+    assert progress["playback_speed"] == 1.0
+    assert storage.data["player"]["state"] == "idle"
+
+    storage.set_speed(1.5)
+
+    assert storage.data["settings"]["default_playback_speed"] == 1.5
+    assert storage.data["player"]["speed"] == 1.5
 
 
 def test_snapshot_is_deep_copy() -> None:

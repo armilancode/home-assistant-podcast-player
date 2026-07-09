@@ -69,11 +69,50 @@ def test_signed_proxy_urls_use_home_assistant_base_url() -> None:
     assert artwork.startswith("http://ha.example.test:8123/api/podcast_player/speaker_artwork/ep_123?")
 
 
-def test_local_base_url_falls_back_to_external_url() -> None:
+def test_local_base_url_falls_back_to_external_url(monkeypatch) -> None:
     """The helper falls back to configured external URL when internal URL is empty."""
+    from homeassistant.helpers import network
+
+    monkeypatch.setattr(network, "get_url", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no helper url")))
     hass = SimpleNamespace(config=SimpleNamespace(internal_url=None, external_url="https://ha.example.test/"))
 
     assert local_base_url(hass) == "https://ha.example.test"
+
+
+def test_local_base_url_retries_helper_signature(monkeypatch) -> None:
+    """The helper tolerates Home Assistant get_url signature differences."""
+    from homeassistant.helpers import network
+
+    calls = []
+
+    def fake_get_url(hass, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise TypeError("old signature")
+        return "http://helper.example.test:8123/"
+
+    monkeypatch.setattr(network, "get_url", fake_get_url)
+    hass = SimpleNamespace(config=SimpleNamespace(internal_url="http://fallback.example.test", external_url=None))
+
+    assert local_base_url(hass) == "http://helper.example.test:8123"
+    assert len(calls) == 2
+
+
+def test_local_base_url_falls_back_after_empty_helper_urls(monkeypatch) -> None:
+    """The helper uses configured URLs when Home Assistant returns no helper URL."""
+    from homeassistant.helpers import network
+
+    calls = []
+
+    def fake_get_url(hass, **kwargs):
+        calls.append(kwargs)
+        return ""
+
+    monkeypatch.setattr(network, "get_url", fake_get_url)
+    hass = SimpleNamespace(config=SimpleNamespace(internal_url="http://internal.example.test/", external_url=None))
+
+    assert local_base_url(hass) == "http://internal.example.test"
+    assert len(calls) == 4
 
 
 def test_signed_proxy_url_returns_none_without_base_url() -> None:
