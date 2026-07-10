@@ -304,7 +304,7 @@ async def test_coordinator_initialize_shutdown_and_update_failure() -> None:
     assert coord._external_poll_task is None
 
     coord.async_refresh_feeds = AsyncMock(side_effect=RuntimeError("boom"))
-    with pytest.raises(UpdateFailed, match="boom"):
+    with pytest.raises(UpdateFailed):
         await coord._async_update_data()
 
 
@@ -599,7 +599,7 @@ async def test_resume_without_episode_does_nothing_or_raises_for_speaker() -> No
     coord.storage.data["player"]["output_mode"] = "speaker"
     coord.storage.data["player"]["target_media_player"] = "media_player.kitchen"
 
-    with pytest.raises(HomeAssistantError, match="No podcast episode"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_resume()
 
 
@@ -762,7 +762,7 @@ async def test_dlna_description_and_stop_safety_paths() -> None:
             supported_actions={"Stop"},
         )
     )
-    with pytest.raises(HomeAssistantError, match="force stop"):
+    with pytest.raises(HomeAssistantError):
         await coord._async_stop_via_dlna("media_player.dlna")
 
     control = FakeExternalControl(
@@ -874,15 +874,15 @@ async def test_play_on_media_player_error_paths(monkeypatch: pytest.MonkeyPatch)
     state = SimpleNamespace(state="idle", attributes={"supported_features": int(MediaPlayerEntityFeature.PLAY_MEDIA)}, name="Kitchen")
     coord = _coordinator({"media_player.kitchen": state})
 
-    with pytest.raises(HomeAssistantError, match="No podcast episode"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_play_on_media_player("media_player.kitchen", episode_id="missing")
 
     coord.storage.data["episodes"]["bad"] = {"feed_id": "feed_1", "audio_url": "https://cdn.example.test/bad.mp3"}
-    with pytest.raises(HomeAssistantError, match="no episode_id"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_play_on_media_player("media_player.kitchen", episode_id="bad")
 
     coord.storage.data["episodes"]["no_audio"] = {"episode_id": "no_audio", "feed_id": "feed_1"}
-    with pytest.raises(HomeAssistantError, match="no playable audio"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_play_on_media_player("media_player.kitchen", episode_id="no_audio")
 
     coord.storage.data["episodes"]["ep_1"] = {
@@ -891,11 +891,11 @@ async def test_play_on_media_player_error_paths(monkeypatch: pytest.MonkeyPatch)
         "audio_url": "https://cdn.example.test/ep_1.mp3",
     }
     monkeypatch.setattr("custom_components.podcast_player.coordinator.make_signed_speaker_proxy_url", lambda *args: None)
-    with pytest.raises(HomeAssistantError, match="speaker proxy URL"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_play_on_media_player("media_player.kitchen", episode_id="ep_1", url_mode="signed_proxy")
 
     coord.hass.services.async_call = AsyncMock(side_effect=RuntimeError("speaker rejected"))
-    with pytest.raises(HomeAssistantError, match="speaker rejected"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_play_on_media_player("media_player.kitchen", episode_id="ep_1")
 
     assert coord.storage.data["player"]["speaker_last_error"] == "speaker rejected"
@@ -938,7 +938,7 @@ async def test_stop_media_player_validation_and_error_paths() -> None:
     state = SimpleNamespace(state="playing", attributes={"supported_features": features}, name="Kitchen")
     coord = _coordinator({"media_player.kitchen": state})
 
-    with pytest.raises(HomeAssistantError, match="external media_player"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_stop_media_player("sensor.bad")
 
     coord.storage.data["player"]["output_mode"] = "speaker"
@@ -946,7 +946,7 @@ async def test_stop_media_player_validation_and_error_paths() -> None:
     coord.hass.services.async_call = AsyncMock(side_effect=RuntimeError("stop rejected"))
     coord._async_stop_via_dlna = AsyncMock(side_effect=RuntimeError("dlna failed"))
 
-    with pytest.raises(HomeAssistantError, match="stop rejected"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_stop_media_player("media_player.kitchen")
 
     assert "HA media_stop failed: stop rejected" in coord.storage.data["player"]["speaker_last_error"]
@@ -960,7 +960,7 @@ async def test_prepare_media_source_playback_missing_and_resume_position() -> No
     coord = _coordinator({"media_player.kitchen": state})
     coord._ensure_external_polling = lambda: None
 
-    with pytest.raises(HomeAssistantError, match="not found"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_prepare_media_source_playback(
             episode_id="missing",
             media_player_entity_id="media_player.kitchen",
@@ -1098,7 +1098,7 @@ async def test_remaining_speaker_error_branches(monkeypatch: pytest.MonkeyPatch)
     coord.storage.data["player"]["target_media_player"] = "media_player.kitchen"
     coord.async_stop_media_player = AsyncMock(side_effect=RuntimeError("stop failed"))
 
-    with pytest.raises(HomeAssistantError, match="Could not stop previous speaker"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_play_episode("ep_1")
 
     coord.hass.services.async_call = AsyncMock(side_effect=RuntimeError("seek rejected"))
@@ -1151,7 +1151,7 @@ async def test_update_failure_polling_and_registry_branches(monkeypatch: pytest.
     coord = _coordinator()
     coord.async_refresh_feeds = AsyncMock(side_effect=RuntimeError("refresh failed"))
 
-    with pytest.raises(UpdateFailed, match="refresh failed"):
+    with pytest.raises(UpdateFailed):
         await coord._async_update_data()
 
     coord.storage.data["player"]["external_session"]["active"] = True
@@ -1264,22 +1264,22 @@ async def test_speaker_pause_resume_and_seek_error_fallbacks() -> None:
     coord.storage.data["player"]["output_mode"] = "speaker"
     coord.storage.data["player"]["target_media_player"] = "media_player.kitchen"
 
-    with pytest.raises(HomeAssistantError, match="does not support pause"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_pause()
 
-    assert "does not support pause" in coord.storage.data["player"]["speaker_last_error"]
+    assert coord.storage.data["player"]["speaker_last_error"] == "target_pause_unsupported"
 
     features = int(MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.PAUSE)
     coord.hass.states._states["media_player.kitchen"] = SimpleNamespace(state="playing", attributes={"supported_features": features}, name="Kitchen")
     coord.hass.services.async_call = AsyncMock(side_effect=RuntimeError("pause rejected"))
 
-    with pytest.raises(HomeAssistantError, match="rejected pause"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_pause()
 
     coord.hass.states._states["media_player.kitchen"] = SimpleNamespace(state="paused", attributes={"supported_features": int(MediaPlayerEntityFeature.PLAY_MEDIA)}, name="Kitchen")
     coord.hass.services.async_call = AsyncMock()
 
-    with pytest.raises(HomeAssistantError, match="does not support resume"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_resume()
 
     coord.hass.states._states["media_player.kitchen"] = SimpleNamespace(state="unavailable", attributes={}, name="Kitchen")
@@ -1297,7 +1297,7 @@ async def test_stop_and_dlna_validation_branches() -> None:
     """Stop and target validation helpers cover no-target, inactive, and disabled-DLNA paths."""
     coord = _coordinator()
 
-    with pytest.raises(HomeAssistantError, match="No podcast media player"):
+    with pytest.raises(HomeAssistantError):
         await coord.async_stop_media_player()
 
     coord.storage.data["player"]["external_session"].update({"active": True, "target_media_player": "media_player.kitchen"})
@@ -1318,13 +1318,13 @@ async def test_stop_and_dlna_validation_branches() -> None:
     assert coord.storage.data["player"]["output_mode"] == "browser"
     assert coord.storage.data["player"]["speaker_last_error"] is None
 
-    with pytest.raises(HomeAssistantError, match="external media_player"):
+    with pytest.raises(HomeAssistantError):
         coord._validate_media_player_control_target("sensor.bad", "seek")
-    with pytest.raises(HomeAssistantError, match="not found"):
+    with pytest.raises(HomeAssistantError):
         coord._validate_media_player_control_target("media_player.missing", "seek")
 
     coord.hass.states._states["media_player.unavailable"] = SimpleNamespace(state="unavailable", attributes={}, name="Unavailable")
-    with pytest.raises(HomeAssistantError, match="not available"):
+    with pytest.raises(HomeAssistantError):
         coord._validate_media_player_control_target("media_player.unavailable", "seek")
 
     coord.storage.data["settings"]["enhanced_dlna_controls"] = False

@@ -569,13 +569,13 @@ def test_pause_dlna_without_pause_action_reports_clean_error() -> None:
     )
     _enable_fake_dlna(coord, control)
 
-    with pytest.raises(HomeAssistantError, match="does not support pause"):
+    with pytest.raises(HomeAssistantError):
         asyncio.run(coord.async_pause())
 
     assert control.paused is False
     assert coord.storage.data["player"]["state"] == "playing"
     assert coord.storage.data["player"]["output_mode"] == "speaker"
-    assert "does not support pause" in coord.storage.data["player"]["speaker_last_error"]
+    assert coord.storage.data["player"]["speaker_last_error"] == "target_pause_unsupported"
     assert not coord.hass.services.called
 
 

@@ -66,6 +66,149 @@
       }
     }
   },
+  "exceptions": {
+    "episode_missing_id": {
+      "message": "The selected podcast episode is missing its identifier."
+    },
+    "episode_no_audio": {
+      "message": "Podcast episode {episode_id} has no playable audio URL."
+    },
+    "episode_not_found": {
+      "message": "Podcast episode {episode_id} was not found."
+    },
+    "external_media_player_required": {
+      "message": "The target {target} must be an external media player entity."
+    },
+    "feed_add_failed": {
+      "message": "The podcast feed could not be added."
+    },
+    "feed_connection_failed": {
+      "message": "Home Assistant could not connect to the podcast feed."
+    },
+    "feed_http_error": {
+      "message": "The podcast feed server returned an error."
+    },
+    "feed_invalid_url": {
+      "message": "The podcast feed URL must start with http:// or https://."
+    },
+    "feed_name_ambiguous": {
+      "message": "More than one podcast feed matches {feed_name}: {matches}."
+    },
+    "feed_name_not_found": {
+      "message": "No podcast feed matches {feed_name}."
+    },
+    "feed_no_audio": {
+      "message": "The feed contains no episodes with playable audio."
+    },
+    "feed_no_episodes": {
+      "message": "The feed contains no podcast episodes."
+    },
+    "feed_not_found": {
+      "message": "Podcast feed {feed_id} was not found."
+    },
+    "feed_parse_error": {
+      "message": "The podcast feed could not be parsed."
+    },
+    "feed_redirect_loop": {
+      "message": "The podcast feed redirected too many times."
+    },
+    "feed_refresh_failed": {
+      "message": "Podcast feeds could not be refreshed."
+    },
+    "feed_selection_required": {
+      "message": "Select a podcast feed target or provide feed_id or feed_name."
+    },
+    "feed_ssl_error": {
+      "message": "Home Assistant could not establish a secure connection to the podcast feed."
+    },
+    "feed_timeout": {
+      "message": "The podcast feed server timed out."
+    },
+    "feed_too_large": {
+      "message": "The podcast feed exceeds the 10 MB safety limit."
+    },
+    "initial_feed_invalid": {
+      "message": "The initial feed is not a playable podcast feed."
+    },
+    "initial_feed_invalid_url": {
+      "message": "The initial podcast feed URL is invalid."
+    },
+    "initial_feed_unavailable": {
+      "message": "The initial podcast feed is temporarily unavailable. Home Assistant will retry automatically."
+    },
+    "invalid_feed_entity_target": {
+      "message": "{entity_id} is not a Podcast Player feed sensor."
+    },
+    "media_item_not_playable": {
+      "message": "The selected podcast media item is not playable."
+    },
+    "media_player_target_field": {
+      "message": "{service}: The action target selects a podcast feed. Set the output media player using media_player_entity_id."
+    },
+    "media_source_path_not_found": {
+      "message": "The podcast media source path was not found."
+    },
+    "media_source_playback_failed": {
+      "message": "Podcast playback could not be prepared for {target}."
+    },
+    "no_current_episode_to_mark": {
+      "message": "There is no current podcast episode to mark."
+    },
+    "no_episode_for_selection": {
+      "message": "No podcast episode is available for the requested selection."
+    },
+    "no_episode_to_resume": {
+      "message": "There is no podcast episode available to resume."
+    },
+    "no_matching_episode": {
+      "message": "No matching podcast episode was found."
+    },
+    "no_media_player_target": {
+      "message": "No podcast media player target is known to stop."
+    },
+    "not_configured": {
+      "message": "Podcast Player is not configured."
+    },
+    "previous_target_stop_failed": {
+      "message": "The previous media player could not be stopped before browser playback started."
+    },
+    "proxy_url_unavailable": {
+      "message": "Home Assistant could not create a speaker proxy URL. Configure the Home Assistant internal or external URL."
+    },
+    "single_media_player_target": {
+      "message": "Select only one media player target."
+    },
+    "target_not_available": {
+      "message": "Media player {target} is not available for podcast playback."
+    },
+    "target_not_found": {
+      "message": "Media player {target} was not found."
+    },
+    "target_pause_failed": {
+      "message": "Media player {target} rejected the pause request."
+    },
+    "target_pause_unsupported": {
+      "message": "Media player {target} does not support pausing."
+    },
+    "target_playback_failed": {
+      "message": "Media player {target} rejected the podcast audio."
+    },
+    "target_resume_failed": {
+      "message": "Media player {target} rejected the resume request."
+    },
+    "target_resume_unsupported": {
+      "message": "Media player {target} does not support resuming."
+    },
+    "target_session_changed": {
+      "message": "The media player is no longer playing this podcast session. Use force stop to stop it anyway."
+    },
+    "target_stop_failed": {
+      "message": "Media player {target} could not be stopped."
+    },
+    "target_unavailable_for_action": {
+      "message": "Media player {target} is not available for this action."
+    }
+  },
   "config": {
     "step": {
       "user": {

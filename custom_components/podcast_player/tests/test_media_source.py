@@ -229,12 +229,19 @@ def test_async_browse_media_routes_all_directory_paths() -> None:
     assert feed_unplayed.identifier == "feed/feed_1/unplayed"
     assert feed_unplayed.title == "Feed One: Unplayed episodes"
 
-    with pytest.raises(BrowseError, match="not configured"):
+    with pytest.raises(BrowseError) as not_configured:
         asyncio.run(PodcastMediaSource(SimpleNamespace(data={})).async_browse_media(_item(None)))
-    with pytest.raises(BrowseError, match="not found"):
+    with pytest.raises(BrowseError) as feed_not_found:
         asyncio.run(source.async_browse_media(_item("feed/feed_disabled")))
-    with pytest.raises(BrowseError, match="path"):
+    with pytest.raises(BrowseError) as path_not_found:
         asyncio.run(source.async_browse_media(_item("feed/feed_1/unknown")))
+
+    assert not_configured.value.translation_key == "not_configured"
+    assert feed_not_found.value.translation_key == "feed_not_found"
+    assert feed_not_found.value.translation_placeholders == {
+        "feed_id": "feed_disabled"
+    }
+    assert path_not_found.value.translation_key == "media_source_path_not_found"
 
 
 def test_feeds_directory_lists_enabled_feeds_sorted() -> None:
@@ -495,9 +502,13 @@ def test_resolve_unavailable_target_fails_before_play_media() -> None:
     _add_feed(runtime.storage, "feed_1", "Feed One")
     _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
 
-    with pytest.raises(Unresolvable, match="Speaker is unavailable"):
+    with pytest.raises(Unresolvable) as error:
         asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.offline")))
 
+    assert error.value.translation_key == "target_not_available"
+    assert error.value.translation_placeholders == {
+        "target": "media_player.offline"
+    }
     assert runtime.coordinator.prepared_media_source_playback == []
 
 
@@ -512,8 +523,13 @@ def test_resolve_target_prepare_error_becomes_unresolvable() -> None:
 
     runtime.coordinator.async_prepare_media_source_playback = fail_prepare
 
-    with pytest.raises(Unresolvable, match="Target rejected playback"):
+    with pytest.raises(Unresolvable) as error:
         asyncio.run(_source(runtime).async_resolve_media(_item("episode/ep_1", "media_player.speaker")))
+
+    assert error.value.translation_key == "media_source_playback_failed"
+    assert error.value.translation_placeholders == {
+        "target": "media_player.speaker"
+    }
 
 
 def test_resolve_missing_or_unplayable_episode_raises() -> None:
@@ -521,21 +537,29 @@ def test_resolve_missing_or_unplayable_episode_raises() -> None:
     runtime = _runtime()
     source = _source(runtime)
 
-    with pytest.raises(Unresolvable, match="not configured"):
+    with pytest.raises(Unresolvable) as not_configured:
         asyncio.run(PodcastMediaSource(SimpleNamespace(data={})).async_resolve_media(_item("episode/ep_1")))
 
-    with pytest.raises(Unresolvable, match="not playable"):
+    with pytest.raises(Unresolvable) as not_playable:
         asyncio.run(source.async_resolve_media(_item("feed/feed_1")))
 
-    with pytest.raises(Unresolvable):
+    with pytest.raises(Unresolvable) as not_found:
         asyncio.run(source.async_resolve_media(_item("episode/missing")))
+
+    assert not_configured.value.translation_key == "not_configured"
+    assert not_playable.value.translation_key == "media_item_not_playable"
+    assert not_found.value.translation_key == "episode_not_found"
+    assert not_found.value.translation_placeholders == {"episode_id": "missing"}
 
     _add_feed(runtime.storage, "feed_1", "Feed One")
     _add_episode(runtime.storage, "ep_1", "feed_1", "Episode", "2026-01-01T00:00:00+00:00")
     runtime.storage.data["episodes"]["ep_1"]["audio_url"] = None
 
-    with pytest.raises(Unresolvable):
+    with pytest.raises(Unresolvable) as no_audio:
         asyncio.run(source.async_resolve_media(_item("episode/ep_1")))
+
+    assert no_audio.value.translation_key == "episode_no_audio"
+    assert no_audio.value.translation_placeholders == {"episode_id": "ep_1"}
 
 
 def test_target_proxy_preference_and_didl_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:

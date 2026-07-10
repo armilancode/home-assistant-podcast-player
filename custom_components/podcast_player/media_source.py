@@ -18,6 +18,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, NAME, URL_MODE_DIRECT, URL_MODE_SIGNED_PROXY
 from .coordinator import PodcastRuntime
+from .exceptions import translated_error
 from .speaker_proxy import (
     make_signed_speaker_artwork_proxy_url,
     make_signed_speaker_proxy_path,
@@ -71,20 +72,24 @@ class PodcastMediaSource(MediaSource):
         """Resolve an episode to a playable URL."""
         runtime = _runtime(self.hass)
         if runtime is None:
-            raise Unresolvable("Podcast Player is not configured")
+            raise translated_error(Unresolvable, "not_configured")
 
         parts = _parts(item.identifier)
         if len(parts) < 2 or parts[0] != "episode":
-            raise Unresolvable("Podcast media item is not playable")
+            raise translated_error(Unresolvable, "media_item_not_playable")
 
         episode_id = parts[1]
         episode = runtime.storage.get_episode(episode_id)
         if not episode:
-            raise Unresolvable("Podcast episode was not found")
+            raise translated_error(
+                Unresolvable, "episode_not_found", episode_id=episode_id
+            )
 
         direct_url = episode.get("audio_url")
         if not direct_url:
-            raise Unresolvable("Podcast episode has no playable audio URL")
+            raise translated_error(
+                Unresolvable, "episode_no_audio", episode_id=episode_id
+            )
 
         settings = runtime.storage.data["settings"]
         secret_before = settings.get("speaker_proxy_secret")
@@ -93,8 +98,9 @@ class PodcastMediaSource(MediaSource):
         if target is not None:
             target_status = runtime.coordinator.media_source_target_status(str(target))
             if not target_status.get("playable"):
-                reason = target_status.get("reason") or f"Target media player is not available: {target}"
-                raise Unresolvable(str(reason))
+                raise translated_error(
+                    Unresolvable, "target_not_available", target=target
+                )
 
         url, url_mode = _resolve_episode_url_for_target(
             self.hass,
@@ -118,7 +124,9 @@ class PodcastMediaSource(MediaSource):
                     url_mode=url_mode,
                 )
             except HomeAssistantError as err:
-                raise Unresolvable(str(err)) from err
+                raise translated_error(
+                    Unresolvable, "media_source_playback_failed", target=target
+                ) from err
 
         if not secret_before and settings.get("speaker_proxy_secret"):
             await runtime.storage.async_save()
@@ -142,7 +150,7 @@ class PodcastMediaSource(MediaSource):
         """Browse podcast feeds and episodes."""
         runtime = _runtime(self.hass)
         if runtime is None:
-            raise BrowseError("Podcast Player is not configured")
+            raise translated_error(BrowseError, "not_configured")
 
         parts = _parts(item.identifier)
         if not parts:
@@ -158,13 +166,15 @@ class PodcastMediaSource(MediaSource):
             feed_id = parts[1]
             feed = runtime.storage.get_feed(feed_id)
             if not feed or not feed.get("enabled", True):
-                raise BrowseError("Podcast feed was not found")
+                raise translated_error(
+                    BrowseError, "feed_not_found", feed_id=feed_id
+                )
             if len(parts) == 2:
                 return self._feed(runtime, feed)
             if len(parts) == 3 and parts[2] in ROOT_CATEGORIES:
                 return self._episode_list(runtime, parts[2], feed_id=feed_id, title_prefix=feed.get("title"))
 
-        raise BrowseError("Podcast media source path was not found")
+        raise translated_error(BrowseError, "media_source_path_not_found")
 
     def _root(self, runtime: PodcastRuntime) -> BrowseMediaSource:
         """Return the media source root."""

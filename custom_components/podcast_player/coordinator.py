@@ -27,6 +27,7 @@ from .const import (
     EVENT_PLAYBACK_STARTED,
     USER_AGENT,
 )
+from .exceptions import exception_message, translated_error
 from .external_control import (
     DlnaAvTransportController,
     ExternalPlaybackStatus,
@@ -172,7 +173,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             await self.async_refresh_feeds()
         except Exception as err:  # noqa: BLE001 - coordinator must keep HA alive
-            raise UpdateFailed(str(err)) from err
+            raise translated_error(UpdateFailed, "feed_refresh_failed") from err
         return self.storage.snapshot()
 
     async def async_fetch_feed_text(self, rss_url: str) -> tuple[str, str]:
@@ -656,7 +657,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         command never leaves an orphan TV/speaker session running.
         """
         if not self.storage.get_episode(episode_id):
-            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
+            raise translated_error(
+                ServiceValidationError, "episode_not_found", episode_id=episode_id
+            )
         player = self.storage.data["player"]
         session = self._external_session()
         previous_target = (
@@ -669,7 +672,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.async_stop_media_player(previous_target)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Podcast Player could not stop previous speaker %s before browser playback: %s", previous_target, err)
-                raise HomeAssistantError(f"Could not stop previous speaker target before browser playback: {err}") from err
+                raise translated_error(
+                    HomeAssistantError, "previous_target_stop_failed"
+                ) from err
 
         self.storage.set_player_state("playing", episode_id)
         player = self.storage.data["player"]
@@ -701,9 +706,17 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     tried_dlna = True
                     paused = await self._async_pause_via_dlna(target)
                     if not paused:
-                        raise HomeAssistantError(f"Target media player does not support pause: {target}")
+                        raise translated_error(
+                            HomeAssistantError,
+                            "target_pause_unsupported",
+                            target=target,
+                        )
                 else:
-                    raise HomeAssistantError(f"Target media player does not support pause: {target}")
+                    raise translated_error(
+                        HomeAssistantError,
+                        "target_pause_unsupported",
+                        target=target,
+                    )
             except HomeAssistantError as err:
                 if not paused and not tried_dlna:
                     paused = await self._async_pause_via_dlna(target)
@@ -712,9 +725,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise
             except Exception as err:  # noqa: BLE001
                 if not await self._async_pause_via_dlna(target):
-                    message = f"Target media player rejected pause: {err}"
-                    await self._store_speaker_error(message)
-                    raise HomeAssistantError(message) from err
+                    error = translated_error(
+                        HomeAssistantError, "target_pause_failed", target=target
+                    )
+                    await self._store_speaker_error(exception_message(error))
+                    raise error from err
             if paused:
                 if self._external_session().get("control_source") != "dlna":
                     self._external_session()["control_source"] = "ha"
@@ -765,7 +780,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_seek(self, episode_id: str, position: float) -> None:
         """Seek current episode or speaker target when applicable."""
         if not self._known_episode_or_progress(episode_id):
-            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
+            raise translated_error(
+                ServiceValidationError, "episode_not_found", episode_id=episode_id
+            )
         player = self.storage.data["player"]
         if (
             player.get("output_mode") == "speaker"
@@ -801,7 +818,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """Save progress."""
         if not self._known_episode_or_progress(episode_id):
-            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
+            raise translated_error(
+                ServiceValidationError, "episode_not_found", episode_id=episode_id
+            )
         before = self.storage.get_progress(episode_id).get("played", False)
         progress = self.storage.save_progress(episode_id, position, duration, playing, speed)
         after = progress.get("played", False)
@@ -813,7 +832,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_mark_played(self, episode_id: str, played: bool) -> None:
         """Mark episode played/unplayed."""
         if not self._known_episode_or_progress(episode_id):
-            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
+            raise translated_error(
+                ServiceValidationError, "episode_not_found", episode_id=episode_id
+            )
         self.storage.mark_played(episode_id, played)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -821,7 +842,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_speed(self, speed: float, episode_id: str | None = None) -> None:
         """Set speed."""
         if episode_id is not None and not self._known_episode_or_progress(episode_id):
-            raise ServiceValidationError(f"Podcast episode not found: {episode_id}")
+            raise translated_error(
+                ServiceValidationError, "episode_not_found", episode_id=episode_id
+            )
         self.storage.set_speed(speed, episode_id)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -841,7 +864,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if player.get("output_mode") == "speaker" and player.get("target_media_player"):
             target = str(player.get("target_media_player"))
             if not episode_id:
-                raise HomeAssistantError("No podcast episode available to resume")
+                raise translated_error(HomeAssistantError, "no_episode_to_resume")
             resumed = False
             tried_dlna = False
             try:
@@ -859,9 +882,17 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     tried_dlna = True
                     resumed = await self._async_play_via_dlna(target)
                     if not resumed:
-                        raise HomeAssistantError(f"Target media player does not support resume: {target}")
+                        raise translated_error(
+                            HomeAssistantError,
+                            "target_resume_unsupported",
+                            target=target,
+                        )
                 else:
-                    raise HomeAssistantError(f"Target media player does not support resume: {target}")
+                    raise translated_error(
+                        HomeAssistantError,
+                        "target_resume_unsupported",
+                        target=target,
+                    )
             except HomeAssistantError as err:
                 if not resumed and not tried_dlna:
                     resumed = await self._async_play_via_dlna(target)
@@ -870,9 +901,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise
             except Exception as err:  # noqa: BLE001
                 if not await self._async_play_via_dlna(target):
-                    message = f"Target media player rejected resume: {err}"
-                    await self._store_speaker_error(message)
-                    raise HomeAssistantError(message) from err
+                    error = translated_error(
+                        HomeAssistantError, "target_resume_failed", target=target
+                    )
+                    await self._store_speaker_error(exception_message(error))
+                    raise error from err
             if resumed:
                 if self._external_session().get("control_source") != "dlna":
                     self._external_session()["control_source"] = "ha"
@@ -908,7 +941,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Mark the current episode played/unplayed."""
         episode_id = self.storage.data["player"].get("current_episode_id")
         if not episode_id:
-            raise HomeAssistantError("No current podcast episode to mark")
+            raise translated_error(HomeAssistantError, "no_current_episode_to_mark")
         await self.async_mark_played(episode_id, played)
 
     async def async_mark_feed_played(self, feed_id: str, played: bool = True) -> int:
@@ -966,23 +999,25 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         episode = self._select_episode_for_output(episode_id, feed_id, episode_mode, feed_ids=feed_ids)
         if not episode:
-            raise HomeAssistantError("No podcast episode available for the requested selection")
+            raise translated_error(HomeAssistantError, "no_episode_for_selection")
 
         episode_id = episode.get("episode_id")
         if not episode_id:
-            raise HomeAssistantError("Selected episode has no episode_id")
+            raise translated_error(HomeAssistantError, "episode_missing_id")
 
         resume_seconds = self._resume_position_for_episode(episode_id, resume_position)
 
         if url_mode == "signed_proxy":
             url = make_signed_speaker_proxy_url(self.hass, self.storage.data["settings"], episode_id)
             if not url:
-                raise HomeAssistantError("Could not build a Home Assistant speaker proxy URL. Configure HA internal/external URL.")
+                raise translated_error(HomeAssistantError, "proxy_url_unavailable")
         else:
             url = episode.get("audio_url")
 
         if not url:
-            raise HomeAssistantError("Selected episode has no playable audio URL")
+            raise translated_error(
+                HomeAssistantError, "episode_no_audio", episode_id=episode_id
+            )
 
         feed = self.storage.get_feed(episode.get("feed_id")) or {}
         title = episode.get("title") or "Podcast episode"
@@ -1063,7 +1098,11 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.storage.data["player"]["speaker_last_error"] = str(err)
             await self.storage.async_save()
             self.async_set_updated_data(self.storage.snapshot())
-            raise HomeAssistantError(f"Target media player rejected podcast audio: {err}") from err
+            raise translated_error(
+                HomeAssistantError,
+                "target_playback_failed",
+                target=media_player_entity_id,
+            ) from err
 
         self.storage.set_player_state("playing", episode_id)
         player = self.storage.data["player"]
@@ -1124,7 +1163,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         episode = self.storage.get_episode(episode_id)
         if not episode:
-            raise HomeAssistantError("Podcast episode was not found")
+            raise translated_error(
+                HomeAssistantError, "episode_not_found", episode_id=episode_id
+            )
 
         target_state = self._validate_media_player_output_target(media_player_entity_id)
         target_info = self._target_registry_info(media_player_entity_id)
@@ -1165,12 +1206,14 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session = self._external_session()
         target = media_player_entity_id or session.get("target_media_player") or player.get("target_media_player") or player.get("last_target_media_player")
         if not target:
-            raise HomeAssistantError("No podcast media player target is known to stop")
+            raise translated_error(HomeAssistantError, "no_media_player_target")
         target = str(target)
         if not self._is_external_media_player_entity_id(target):
-            message = f"Target must be an external media_player entity: {target}"
-            await self._store_speaker_error(message)
-            raise HomeAssistantError(message)
+            error = translated_error(
+                HomeAssistantError, "external_media_player_required", target=target
+            )
+            await self._store_speaker_error(exception_message(error))
+            raise error
 
         state = self.hass.states.get(target)
         target_name = state.name if state is not None else target
@@ -1211,7 +1254,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             try:
                 stopped = await self._async_stop_via_dlna(target, force=force)
             except HomeAssistantError as err:
-                errors.append(str(err))
+                errors.append(exception_message(err))
                 player["last_target_media_player"] = target
                 player["last_target_media_player_name"] = target_name
                 player["speaker_last_error"] = "; ".join(errors)
@@ -1249,7 +1292,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
-        raise HomeAssistantError(player["speaker_last_error"] or f"Could not stop {target}")
+        raise translated_error(
+            HomeAssistantError, "target_stop_failed", target=target
+        )
 
     def _dlna_description_url(self, target: str) -> str | None:
         """Return a DLNA DMR description URL for a target when available."""
@@ -1280,7 +1325,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             session.get("episode_id"),
         )
         if media_match is False and not force:
-            raise HomeAssistantError("Target is no longer playing this podcast session. Use force stop to stop it anyway.")
+            raise translated_error(HomeAssistantError, "target_session_changed")
         if media_match is not None:
             session["media_matches_session"] = media_match
 
@@ -1343,11 +1388,17 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _validate_media_player_output_target(self, entity_id: str) -> Any:
         """Validate that a media_player target is safe to use for podcast output."""
         if not self._is_external_media_player_entity_id(entity_id):
-            raise HomeAssistantError("Target must be an external media_player entity")
+            raise translated_error(
+                HomeAssistantError,
+                "external_media_player_required",
+                target=entity_id,
+            )
         target_state = self.hass.states.get(entity_id)
         status = self._target_status(entity_id, target_state)
         if not status["playable"]:
-            raise HomeAssistantError(str(status["reason"] or f"Target media player is not available: {entity_id}"))
+            raise translated_error(
+                HomeAssistantError, "target_not_available", target=entity_id
+            )
         return target_state
 
     def _is_external_media_player_entity_id(self, entity_id: str) -> bool:
@@ -1357,15 +1408,25 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _validate_media_player_control_target(self, entity_id: str, action: str) -> Any:
         """Validate a target before calling a Home Assistant media_player service."""
         if not self._is_external_media_player_entity_id(entity_id):
-            raise HomeAssistantError("Target must be an external media_player entity")
+            raise translated_error(
+                HomeAssistantError,
+                "external_media_player_required",
+                target=entity_id,
+            )
 
         target_state = self.hass.states.get(entity_id)
         if target_state is None:
-            raise HomeAssistantError(f"Target media player not found: {entity_id}")
+            raise translated_error(
+                HomeAssistantError, "target_not_found", target=entity_id
+            )
 
         state = str(target_state.state)
         if state in UNAVAILABLE_MEDIA_PLAYER_STATES:
-            raise HomeAssistantError(f"Target media player is not available for {action}: {entity_id} is {state}")
+            raise translated_error(
+                HomeAssistantError,
+                "target_unavailable_for_action",
+                target=entity_id,
+            )
 
         return target_state
 
@@ -1379,9 +1440,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _handle_active_target_control_error(self, target: str, err: HomeAssistantError) -> None:
         """Clear stale active speaker state when a known target is gone."""
         if target == self.storage.data["player"].get("target_media_player") and self._target_is_unavailable_or_missing(target):
-            await self._clear_active_speaker_target(target, str(err))
+            await self._clear_active_speaker_target(target, exception_message(err))
             return
-        await self._store_speaker_error(str(err))
+        await self._store_speaker_error(exception_message(err))
 
     async def _clear_active_speaker_target(self, target: str, reason: str) -> None:
         """Clear local active-speaker state without calling an unavailable target."""

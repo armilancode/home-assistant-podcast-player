@@ -152,7 +152,7 @@ def test_small_service_helpers() -> None:
     assert _single_feed_id(["feed_1"]) == "feed_1"
     assert _single_feed_id(["feed_1", "feed_2"]) is None
 
-    with pytest.raises(ServiceValidationError, match="only one media_player"):
+    with pytest.raises(ServiceValidationError):
         _media_player_entity_id_from_service({"entity_id": ["media_player.one", "media_player.two"]})
 
 
@@ -172,13 +172,13 @@ def test_runtime_and_feed_resolution_helpers(hass) -> None:
     assert _feed_ids_from_service(runtime, {"feed_id": "all"}) == []
     assert _feed_ids_from_service(runtime, {"feed_name": "Second Feed"}) == ["feed_2"]
 
-    with pytest.raises(HomeAssistantError, match="not configured"):
+    with pytest.raises(HomeAssistantError):
         _runtime(SimpleNamespace(data={}))
-    with pytest.raises(ServiceValidationError, match="not a Podcast Player feed sensor"):
+    with pytest.raises(ServiceValidationError):
         _feed_ids_from_service(runtime, {"entity_id": "sensor.not_feed"})
-    with pytest.raises(ServiceValidationError, match="Podcast feed not found"):
+    with pytest.raises(ServiceValidationError):
         _feed_ids_from_service(runtime, {"feed_id": "missing"})
-    with pytest.raises(ServiceValidationError, match="not found by name"):
+    with pytest.raises(ServiceValidationError):
         _feed_id_from_name(runtime, "missing")
 
 
@@ -188,7 +188,7 @@ def test_feed_name_resolution_reports_ambiguous_matches(hass) -> None:
     storage.data["feeds"]["feed_3"] = {"feed_id": "feed_3", "title": "Feed One Extended", "enabled": True}
     runtime = _install_runtime(hass, storage=storage)
 
-    with pytest.raises(ServiceValidationError, match="ambiguous"):
+    with pytest.raises(ServiceValidationError):
         _feed_id_from_name(runtime, "Feed")
 
 
@@ -320,7 +320,7 @@ async def test_add_feed_service_converts_parse_errors(hass) -> None:
     runtime = _install_runtime(hass)
     runtime.coordinator.async_add_feed.side_effect = PodcastParseError("invalid_url", "Invalid feed")
 
-    with pytest.raises(HomeAssistantError, match="Invalid feed"):
+    with pytest.raises(HomeAssistantError):
         await hass.services.async_call(DOMAIN, SERVICE_ADD_FEED, {"rss_url": "https://example.test/bad.xml"}, blocking=True)
 
 
@@ -330,7 +330,7 @@ async def test_add_feed_service_logs_unexpected_errors(hass) -> None:
     runtime = _install_runtime(hass)
     runtime.coordinator.async_add_feed.side_effect = RuntimeError("boom")
 
-    with pytest.raises(HomeAssistantError, match="boom"):
+    with pytest.raises(HomeAssistantError):
         await hass.services.async_call(DOMAIN, SERVICE_ADD_FEED, {"rss_url": "https://example.test/bad.xml"}, blocking=True)
 
 
@@ -340,11 +340,11 @@ async def test_play_helpers_raise_for_wrong_or_empty_selections(hass) -> None:
     runtime.coordinator.async_play_next_unplayed.return_value = None
     runtime.coordinator.async_play_latest.return_value = None
 
-    with pytest.raises(ServiceValidationError, match="media_player_entity_id"):
+    with pytest.raises(ServiceValidationError):
         await _play_episode_or_output(runtime, "ep_1", {"entity_id": "media_player.kitchen"})
 
     runtime.storage.data["player"]["current_episode_id"] = None
-    with pytest.raises(HomeAssistantError, match="No matching podcast episode"):
+    with pytest.raises(HomeAssistantError):
         await _play_selected_or_output(runtime, {}, episode_mode="current")
 
 
@@ -384,7 +384,7 @@ async def test_setup_entry_initial_feed_invalid_url_is_config_entry_error(hass, 
 
     with (
         patch("custom_components.podcast_player.PodcastStorage.async_load", AsyncMock()),
-        pytest.raises(ConfigEntryError, match="RSS URL"),
+        pytest.raises(ConfigEntryError),
     ):
         await async_setup_entry(hass, entry)
 

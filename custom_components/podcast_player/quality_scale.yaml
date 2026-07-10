@@ -77,8 +77,8 @@ rules:
     status: done
     comment: Static entity names and the dynamic feed-name prefix use translation keys.
   exception-translations:
-    status: todo
-    comment: Move user-facing exception messages to translation keys.
+    status: done
+    comment: Home Assistant-facing exceptions use integration translation keys with tested placeholders.
   icon-translations:
     status: done
     comment: Custom entity icons are defined in icons.json; domain and device-class icons are retained where appropriate.

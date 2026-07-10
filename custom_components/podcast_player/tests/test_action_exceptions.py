@@ -55,7 +55,7 @@ async def test_remove_feed_missing_raises_service_validation_error(hass) -> None
     coordinator = SimpleNamespace(async_remove_feed=AsyncMock(return_value=False))
     _install_runtime(hass, coordinator)
 
-    with pytest.raises(ServiceValidationError, match="Podcast feed not found: missing"):
+    with pytest.raises(ServiceValidationError) as error:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_REMOVE_FEED,
@@ -63,6 +63,8 @@ async def test_remove_feed_missing_raises_service_validation_error(hass) -> None
             blocking=True,
         )
 
+    assert error.value.translation_key == "feed_not_found"
+    assert error.value.translation_placeholders == {"feed_id": "missing"}
     coordinator.async_remove_feed.assert_awaited_once_with("missing", True)
 
 
@@ -72,13 +74,16 @@ async def test_feed_action_rejects_media_player_target(hass) -> None:
     coordinator = SimpleNamespace(hass=hass)
     _install_runtime(hass, coordinator)
 
-    with pytest.raises(ServiceValidationError, match="media_player_entity_id"):
+    with pytest.raises(ServiceValidationError) as error:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_REFRESH,
             {"entity_id": "media_player.kitchen_speaker"},
             blocking=True,
         )
+
+    assert error.value.translation_key == "media_player_target_field"
+    assert error.value.translation_placeholders == {"service": "refresh_feeds"}
 
 
 async def test_mark_feed_played_requires_feed_selection(hass) -> None:
@@ -87,7 +92,7 @@ async def test_mark_feed_played_requires_feed_selection(hass) -> None:
     coordinator = SimpleNamespace(hass=hass, async_mark_feed_played=AsyncMock())
     _install_runtime(hass, coordinator)
 
-    with pytest.raises(ServiceValidationError, match="Select a Podcast feed target"):
+    with pytest.raises(ServiceValidationError) as error:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_MARK_FEED_PLAYED,
@@ -95,6 +100,8 @@ async def test_mark_feed_played_requires_feed_selection(hass) -> None:
             blocking=True,
         )
 
+    assert error.value.translation_key == "feed_selection_required"
+    assert error.value.translation_placeholders is None
     coordinator.async_mark_feed_played.assert_not_awaited()
 
 
@@ -102,30 +109,33 @@ async def test_unknown_episode_actions_raise_service_validation_error() -> None:
     """Episode-id actions reject unknown episode IDs instead of creating orphan progress."""
     coordinator = _coordinator()
 
-    with pytest.raises(ServiceValidationError, match="Podcast episode not found: missing"):
-        await coordinator.async_play_episode("missing")
-
-    with pytest.raises(ServiceValidationError, match="Podcast episode not found: missing"):
-        await coordinator.async_save_progress("missing", 12)
-
-    with pytest.raises(ServiceValidationError, match="Podcast episode not found: missing"):
-        await coordinator.async_mark_played("missing", True)
-
-    with pytest.raises(ServiceValidationError, match="Podcast episode not found: missing"):
-        await coordinator.async_set_speed(1.25, "missing")
+    for action in (
+        lambda: coordinator.async_play_episode("missing"),
+        lambda: coordinator.async_save_progress("missing", 12),
+        lambda: coordinator.async_mark_played("missing", True),
+        lambda: coordinator.async_set_speed(1.25, "missing"),
+    ):
+        with pytest.raises(ServiceValidationError) as error:
+            await action()
+        assert error.value.translation_key == "episode_not_found"
+        assert error.value.translation_placeholders == {"episode_id": "missing"}
 
 
 async def test_mark_current_without_current_episode_raises_home_assistant_error() -> None:
     """State-dependent actions should report that the requested action cannot run."""
     coordinator = _coordinator()
 
-    with pytest.raises(HomeAssistantError, match="No current podcast episode to mark"):
+    with pytest.raises(HomeAssistantError) as error:
         await coordinator.async_mark_current_played(True)
+
+    assert error.value.translation_key == "no_current_episode_to_mark"
 
 
 async def test_stop_media_player_without_known_target_raises_home_assistant_error() -> None:
     """Stopping a media-player target requires an explicit or remembered target."""
     coordinator = _coordinator()
 
-    with pytest.raises(HomeAssistantError, match="No podcast media player target is known to stop"):
+    with pytest.raises(HomeAssistantError) as error:
         await coordinator.async_stop_media_player()
+
+    assert error.value.translation_key == "no_media_player_target"

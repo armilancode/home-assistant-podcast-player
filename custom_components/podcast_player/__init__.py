@@ -41,6 +41,7 @@ from .const import (
     SERVICE_STOP_OUTPUT,
 )
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
+from .exceptions import translated_error
 from .feed_parser import PodcastParseError
 from .storage import PodcastStorage, make_feed_id, normalize_rss_url
 
@@ -49,6 +50,18 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 INITIAL_FEED_RETRY_ERROR_CODES = {"cannot_connect", "http_error", "redirect_loop", "ssl_error", "timeout"}
+FEED_ERROR_TRANSLATION_KEYS = {
+    "cannot_connect": "feed_connection_failed",
+    "http_error": "feed_http_error",
+    "invalid_url": "feed_invalid_url",
+    "no_audio_enclosures": "feed_no_audio",
+    "no_episodes": "feed_no_episodes",
+    "parse_error": "feed_parse_error",
+    "redirect_loop": "feed_redirect_loop",
+    "ssl_error": "feed_ssl_error",
+    "timeout": "feed_timeout",
+    "too_large": "feed_too_large",
+}
 
 # Home Assistant service targets are exposed as data["entity_id"] for these
 # custom services. Feed-selecting services use podcast feed sensor entities as
@@ -155,17 +168,20 @@ async def _async_import_initial_feed(hass: HomeAssistant, entry: ConfigEntry, ru
     try:
         normalized_url = normalize_rss_url(initial_rss_url)
     except ValueError as err:
-        raise ConfigEntryError(f"Could not add initial podcast feed: {err}") from err
+        raise translated_error(
+            ConfigEntryError, "initial_feed_invalid_url"
+        ) from err
 
     feed_id = make_feed_id(normalized_url)
     if not runtime.storage.get_feed(feed_id):
         try:
             await runtime.coordinator.async_add_feed(normalized_url)
         except PodcastParseError as err:
-            message = f"Could not add initial podcast feed: {err.message}"
             if err.code in INITIAL_FEED_RETRY_ERROR_CODES:
-                raise ConfigEntryNotReady(message) from err
-            raise ConfigEntryError(message) from err
+                raise translated_error(
+                    ConfigEntryNotReady, "initial_feed_unavailable"
+                ) from err
+            raise translated_error(ConfigEntryError, "initial_feed_invalid") from err
 
     data = dict(entry.data)
     data.pop(CONF_INITIAL_RSS_URL, None)
@@ -191,7 +207,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _runtime(hass: HomeAssistant) -> PodcastRuntime:
     entries = hass.data.get(DOMAIN, {})
     if not entries:
-        raise HomeAssistantError("Podcast Player is not configured")
+        raise translated_error(HomeAssistantError, "not_configured")
     return next(iter(entries.values()))
 
 
@@ -223,11 +239,10 @@ def _target_contains_media_player(data: dict[str, Any]) -> bool:
 
 def _raise_media_player_target_help(service_hint: str) -> None:
     """Raise a clear error when an output media player was put in the wrong target field."""
-    raise ServiceValidationError(
-        f"{service_hint}: action Target selects the podcast feed sensor. "
-        "Put the output media player in data.media_player_entity_id instead. "
-        "Example: target.entity_id = sensor.example_podcast_feed, "
-        "data.media_player_entity_id = media_player.kitchen_speaker."
+    raise translated_error(
+        ServiceValidationError,
+        "media_player_target_field",
+        service=service_hint,
     )
 
 
@@ -252,7 +267,7 @@ def _media_player_entity_id_from_service(data: dict[str, Any]) -> str | None:
     if not media_targets:
         return None
     if len(media_targets) > 1:
-        raise ServiceValidationError("Select only one media_player target for this stop service")
+        raise translated_error(ServiceValidationError, "single_media_player_target")
     return media_targets[0]
 
 
@@ -275,9 +290,16 @@ def _feed_id_from_name(runtime: PodcastRuntime, feed_name: str | None) -> str | 
 
     if len(exact) > 1 or len(partial) > 1:
         names = ", ".join(str(feed.get("title") or feed.get("feed_id")) for feed in (exact or partial)[:5])
-        raise ServiceValidationError(f"Podcast feed name is ambiguous: {feed_name}. Matches: {names}")
+        raise translated_error(
+            ServiceValidationError,
+            "feed_name_ambiguous",
+            feed_name=feed_name,
+            matches=names,
+        )
 
-    raise ServiceValidationError(f"Podcast feed not found by name: {feed_name}")
+    raise translated_error(
+        ServiceValidationError, "feed_name_not_found", feed_name=feed_name
+    )
 
 
 def _feed_ids_from_service(runtime: PodcastRuntime, data: dict[str, Any], *, service_hint: str = "Podcast Player service") -> list[str]:
@@ -310,7 +332,11 @@ def _feed_ids_from_service(runtime: PodcastRuntime, data: dict[str, Any], *, ser
             continue
         if entity_id.startswith("media_player."):
             _raise_media_player_target_help(service_hint)
-        raise ServiceValidationError(f"Target {entity_id} is not a Podcast Player feed sensor")
+        raise translated_error(
+            ServiceValidationError,
+            "invalid_feed_entity_target",
+            entity_id=entity_id,
+        )
 
     if feed_ids:
         return feed_ids
@@ -318,7 +344,9 @@ def _feed_ids_from_service(runtime: PodcastRuntime, data: dict[str, Any], *, ser
     feed_id = data.get("feed_id")
     if feed_id and feed_id != "all":
         if not runtime.storage.get_feed(feed_id):
-            raise ServiceValidationError(f"Podcast feed not found: {feed_id}")
+            raise translated_error(
+                ServiceValidationError, "feed_not_found", feed_id=feed_id
+            )
         return [feed_id]
 
     feed_name_id = _feed_id_from_name(runtime, data.get("feed_name"))
@@ -391,7 +419,7 @@ async def _play_selected_or_output(
                 episode = await runtime.coordinator.async_play_latest(feed_id, feed_ids=selected_feed_ids)
 
     if episode is None:
-        raise HomeAssistantError("No matching podcast episode found")
+        raise translated_error(HomeAssistantError, "no_matching_episode")
 
 
 def async_register_services(hass: HomeAssistant) -> None:
@@ -404,16 +432,23 @@ def async_register_services(hass: HomeAssistant) -> None:
         try:
             await runtime.coordinator.async_add_feed(call.data["rss_url"])
         except PodcastParseError as err:
-            raise HomeAssistantError(err.message) from err
+            raise translated_error(
+                HomeAssistantError,
+                FEED_ERROR_TRANSLATION_KEYS.get(err.code, "feed_add_failed"),
+            ) from err
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception("Failed to add podcast feed")
-            raise HomeAssistantError(str(err)) from err
+            raise translated_error(HomeAssistantError, "feed_add_failed") from err
 
     async def remove_feed(call: ServiceCall) -> None:
         runtime = _runtime(hass)
         removed = await runtime.coordinator.async_remove_feed(call.data["feed_id"], call.data.get("keep_history", True))
         if not removed:
-            raise ServiceValidationError(f"Podcast feed not found: {call.data['feed_id']}")
+            raise translated_error(
+                ServiceValidationError,
+                "feed_not_found",
+                feed_id=call.data["feed_id"],
+            )
 
     async def refresh(call: ServiceCall) -> None:
         runtime = _runtime(hass)
@@ -484,7 +519,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         data = dict(call.data)
         feed_ids = _feed_ids_from_service(runtime, data, service_hint="mark_feed_played")
         if not feed_ids:
-            raise ServiceValidationError("Select a Podcast feed target, or provide feed_id/feed_name")
+            raise translated_error(ServiceValidationError, "feed_selection_required")
         for feed_id in feed_ids:
             await runtime.coordinator.async_mark_feed_played(feed_id, data.get("played", True))
 
