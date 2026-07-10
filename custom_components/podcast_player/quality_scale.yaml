@@ -48,8 +48,8 @@ rules:
   # Gold
   devices: done
   diagnostics:
-    status: todo
-    comment: Implement downloadable diagnostics with sensitive data redaction.
+    status: done
+    comment: Diagnostics expose aggregate runtime health while redacting or omitting sensitive library and playback data.
   discovery-update-info:
     status: exempt
     comment: This integration does not use discovery.
