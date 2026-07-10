@@ -67,21 +67,21 @@ rules:
     status: exempt
     comment: Podcast feeds are dynamic entities, not device registry devices.
   entity-category:
-    status: todo
-    comment: Audit entity categories for every entity.
+    status: done
+    comment: Primary entities are uncategorized; technical playback and library sensors are diagnostic.
   entity-device-class:
-    status: todo
-    comment: Audit device classes and state classes for all eligible sensors.
+    status: done
+    comment: Duration, output enum, and playback-running entities use applicable device classes; meaningful count sensors use measurement state classes.
   entity-disabled-by-default: done
   entity-translations:
-    status: todo
-    comment: Move entity names to translation keys.
+    status: done
+    comment: Static entity names and the dynamic feed-name prefix use translation keys.
   exception-translations:
     status: todo
     comment: Move user-facing exception messages to translation keys.
   icon-translations:
-    status: todo
-    comment: Move entity icons to icon translations where appropriate.
+    status: done
+    comment: Custom entity icons are defined in icons.json; domain and device-class icons are retained where appropriate.
   reconfiguration-flow:
     status: todo
     comment: Add a dedicated reconfigure flow for existing entries.

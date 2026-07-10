@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
@@ -104,17 +104,15 @@ class PodcastFeedSensor(PodcastBaseSensor):
     media player remains a normal data field named ``media_player_entity_id``.
     """
 
-    _attr_icon = "mdi:podcast"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "feed"
 
     def __init__(self, coordinator: PodcastUpdateCoordinator, feed_id: str) -> None:
         super().__init__(coordinator)
         self.feed_id = feed_id
         self._attr_unique_id = f"podcast_player_feed_{feed_id}"
-
-    @property
-    def name(self) -> str:
         feed = self._feed() or {}
-        return f"Feed {feed.get('title') or self.feed_id}"
+        self._attr_translation_placeholders = {"feed_title": str(feed.get("title") or self.feed_id)}
 
     @property
     def available(self) -> bool:
@@ -185,11 +183,11 @@ class PodcastFeedSensor(PodcastBaseSensor):
 class FeedCountSensor(PodcastBaseSensor):
     """Feed count sensor."""
 
-    _attr_name = "Feeds"
     _attr_unique_id = "podcast_player_feeds"
-    _attr_icon = "mdi:rss"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "feeds"
 
     @property
     def native_value(self) -> int:
@@ -214,9 +212,9 @@ class FeedCountSensor(PodcastBaseSensor):
 class UnplayedCountSensor(PodcastBaseSensor):
     """Unplayed episodes sensor."""
 
-    _attr_name = "Unplayed"
     _attr_unique_id = "podcast_player_unplayed"
-    _attr_icon = "mdi:podcast"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "unplayed"
 
     @property
     def native_value(self) -> int:
@@ -235,9 +233,8 @@ class UnplayedCountSensor(PodcastBaseSensor):
 class LatestEpisodeSensor(PodcastBaseSensor):
     """Latest episode sensor."""
 
-    _attr_name = "Latest episode"
     _attr_unique_id = "podcast_player_latest_episode"
-    _attr_icon = "mdi:playlist-music"
+    _attr_translation_key = "latest_episode"
 
     @property
     def native_value(self) -> str | None:
@@ -265,11 +262,10 @@ class LatestEpisodeSensor(PodcastBaseSensor):
 class CurrentFeedSensor(PodcastBaseSensor):
     """Current feed sensor."""
 
-    _attr_name = "Current feed"
     _attr_unique_id = "podcast_player_current_feed"
-    _attr_icon = "mdi:rss-box"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
+    _attr_translation_key = "current_feed"
 
     @property
     def native_value(self) -> str | None:
@@ -285,9 +281,8 @@ class CurrentFeedSensor(PodcastBaseSensor):
 class CurrentEpisodeSensor(PodcastBaseSensor):
     """Current episode sensor."""
 
-    _attr_name = "Current episode"
     _attr_unique_id = "podcast_player_current_episode"
-    _attr_icon = "mdi:playlist-play"
+    _attr_translation_key = "current_episode"
 
     @property
     def native_value(self) -> str | None:
@@ -315,13 +310,12 @@ class CurrentEpisodeSensor(PodcastBaseSensor):
 class CurrentPositionSensor(PodcastBaseSensor):
     """Current playback position sensor."""
 
-    _attr_name = "Current position"
     _attr_unique_id = "podcast_player_current_position"
-    _attr_icon = "mdi:progress-clock"
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_translation_key = "current_position"
 
     @property
     def native_value(self) -> int:
@@ -331,13 +325,12 @@ class CurrentPositionSensor(PodcastBaseSensor):
 class CurrentDurationSensor(PodcastBaseSensor):
     """Current playback duration sensor."""
 
-    _attr_name = "Current duration"
     _attr_unique_id = "podcast_player_current_duration"
-    _attr_icon = "mdi:timer-outline"
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_translation_key = "current_duration"
 
     @property
     def native_value(self) -> int | None:
@@ -349,12 +342,11 @@ class CurrentDurationSensor(PodcastBaseSensor):
 class CurrentProgressSensor(PodcastBaseSensor):
     """Current playback progress percentage."""
 
-    _attr_name = "Current progress"
     _attr_unique_id = "podcast_player_current_progress"
-    _attr_icon = "mdi:percent"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
     _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_translation_key = "current_progress"
 
     @property
     def native_value(self) -> int:
@@ -369,25 +361,27 @@ class CurrentProgressSensor(PodcastBaseSensor):
 class PlaybackSpeedSensor(PodcastBaseSensor):
     """Playback speed sensor."""
 
-    _attr_name = "Playback speed"
     _attr_unique_id = "podcast_player_playback_speed"
-    _attr_icon = "mdi:speedometer"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
+    _attr_translation_key = "playback_speed"
 
     @property
     def native_value(self) -> float:
-        return float(self._player.get("speed") or self.coordinator.storage.data["settings"].get("default_playback_speed", 1.0))
+        return float(
+            self._player.get("speed") or self.coordinator.storage.data["settings"].get("default_playback_speed", 1.0)
+        )
 
 
 class CurrentOutputSensor(PodcastBaseSensor):
     """Current podcast output mode/target."""
 
-    _attr_name = "Current output"
     _attr_unique_id = "podcast_player_current_output"
-    _attr_icon = "mdi:speaker"
+    _attr_device_class = SensorDeviceClass.ENUM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
+    _attr_options = ["browser", "speaker"]
+    _attr_translation_key = "current_output"
 
     @property
     def native_value(self) -> str:
@@ -411,7 +405,8 @@ class CurrentOutputSensor(PodcastBaseSensor):
         )
         return {
             "target_media_player": target,
-            "target_media_player_name": self._player.get("target_media_player_name") or session.get("target_media_player_name"),
+            "target_media_player_name": self._player.get("target_media_player_name")
+            or session.get("target_media_player_name"),
             "target_state": target_state_value,
             "target_reports_live_state": reports_live_state,
             "target_reports_progress": reports_progress,
@@ -419,7 +414,9 @@ class CurrentOutputSensor(PodcastBaseSensor):
             "external_transport_state": session.get("transport_state"),
             "external_progress_source": session.get("progress_source"),
             "external_control_source": session.get("control_source"),
-            "external_limited_controls": bool(target and not reports_live_state and session.get("progress_source") == "unavailable"),
+            "external_limited_controls": bool(
+                target and not reports_live_state and session.get("progress_source") == "unavailable"
+            ),
             "speaker_url_mode": self._player.get("speaker_url_mode"),
             "speaker_media_content_type": self._player.get("speaker_media_content_type"),
             "speaker_last_error": self._player.get("speaker_last_error"),
@@ -429,11 +426,10 @@ class CurrentOutputSensor(PodcastBaseSensor):
 class LatestByFeedSensor(PodcastBaseSensor):
     """Latest episode by feed summary sensor."""
 
-    _attr_name = "Latest by feed"
     _attr_unique_id = "podcast_player_latest_by_feed"
-    _attr_icon = "mdi:format-list-bulleted"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
+    _attr_translation_key = "latest_by_feed"
 
     @property
     def native_value(self) -> int:

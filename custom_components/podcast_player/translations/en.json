@@ -1,5 +1,71 @@
 {
   "title": "Podcast Player",
+  "entity": {
+    "binary_sensor": {
+      "has_unplayed_episodes": {
+        "name": "Has unplayed episodes"
+      },
+      "is_playing": {
+        "name": "Is playing"
+      }
+    },
+    "button": {
+      "mark_current_played": {
+        "name": "Mark current played"
+      },
+      "play_latest_episode": {
+        "name": "Play latest episode"
+      },
+      "play_next_unplayed": {
+        "name": "Play next unplayed"
+      },
+      "refresh_feeds": {
+        "name": "Refresh feeds"
+      }
+    },
+    "sensor": {
+      "current_duration": {
+        "name": "Current duration"
+      },
+      "current_episode": {
+        "name": "Current episode"
+      },
+      "current_feed": {
+        "name": "Current feed"
+      },
+      "current_output": {
+        "name": "Current output",
+        "state": {
+          "browser": "Browser",
+          "speaker": "Speaker"
+        }
+      },
+      "current_position": {
+        "name": "Current position"
+      },
+      "current_progress": {
+        "name": "Current progress"
+      },
+      "feed": {
+        "name": "Feed {feed_title}"
+      },
+      "feeds": {
+        "name": "Feeds"
+      },
+      "latest_by_feed": {
+        "name": "Latest by feed"
+      },
+      "latest_episode": {
+        "name": "Latest episode"
+      },
+      "playback_speed": {
+        "name": "Playback speed"
+      },
+      "unplayed": {
+        "name": "Unplayed"
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {

@@ -42,9 +42,8 @@ class PodcastButton(CoordinatorEntity[PodcastUpdateCoordinator], ButtonEntity):
 class RefreshButton(PodcastButton):
     """Refresh feeds button."""
 
-    _attr_name = "Refresh feeds"
     _attr_unique_id = "podcast_player_refresh"
-    _attr_icon = "mdi:refresh"
+    _attr_translation_key = "refresh_feeds"
 
     async def async_press(self) -> None:
         """Refresh feeds."""
@@ -54,10 +53,9 @@ class RefreshButton(PodcastButton):
 class PlayLatestButton(PodcastButton):
     """Play latest episode button."""
 
-    _attr_name = "Play latest episode"
     _attr_unique_id = "podcast_player_play_latest"
-    _attr_icon = "mdi:play-circle-outline"
     _attr_entity_registry_enabled_default = False
+    _attr_translation_key = "play_latest_episode"
 
     async def async_press(self) -> None:
         """Select/play latest episode in podcast state."""
@@ -67,10 +65,9 @@ class PlayLatestButton(PodcastButton):
 class PlayNextUnplayedButton(PodcastButton):
     """Play next unplayed episode button."""
 
-    _attr_name = "Play next unplayed"
     _attr_unique_id = "podcast_player_play_next_unplayed"
-    _attr_icon = "mdi:playlist-play"
     _attr_entity_registry_enabled_default = False
+    _attr_translation_key = "play_next_unplayed"
 
     async def async_press(self) -> None:
         """Select/play next unplayed episode in podcast state."""
@@ -80,10 +77,9 @@ class PlayNextUnplayedButton(PodcastButton):
 class MarkCurrentPlayedButton(PodcastButton):
     """Mark current episode played button."""
 
-    _attr_name = "Mark current played"
     _attr_unique_id = "podcast_player_mark_current_played"
-    _attr_icon = "mdi:check-circle-outline"
     _attr_entity_registry_enabled_default = False
+    _attr_translation_key = "mark_current_played"
 
     async def async_press(self) -> None:
         """Mark current episode played."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,9 +33,9 @@ class PodcastBaseBinarySensor(CoordinatorEntity[PodcastUpdateCoordinator], Binar
 class IsPlayingBinarySensor(PodcastBaseBinarySensor):
     """Whether podcast playback is currently marked playing."""
 
-    _attr_name = "Is playing"
     _attr_unique_id = "podcast_player_is_playing"
-    _attr_icon = "mdi:play-circle"
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_translation_key = "is_playing"
 
     @property
     def is_on(self) -> bool:
@@ -45,9 +45,8 @@ class IsPlayingBinarySensor(PodcastBaseBinarySensor):
 class HasUnplayedBinarySensor(PodcastBaseBinarySensor):
     """Whether there are unplayed podcast episodes."""
 
-    _attr_name = "Has unplayed episodes"
     _attr_unique_id = "podcast_player_has_unplayed"
-    _attr_icon = "mdi:podcast"
+    _attr_translation_key = "has_unplayed_episodes"
 
     @property
     def is_on(self) -> bool:

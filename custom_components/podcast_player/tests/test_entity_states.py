@@ -196,7 +196,8 @@ def test_sensor_entities_report_library_and_playback_state() -> None:
     coordinator = FakeCoordinator()
 
     feed_sensor = PodcastFeedSensor(coordinator, "feed_1")
-    assert feed_sensor.name == "Feed Example Podcast"
+    assert feed_sensor.translation_key == "feed"
+    assert feed_sensor.translation_placeholders == {"feed_title": "Example Podcast"}
     assert feed_sensor.available is True
     assert feed_sensor.native_value == 1
     assert feed_sensor.entity_picture == "https://example.test/feed.jpg"

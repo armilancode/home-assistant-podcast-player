@@ -46,6 +46,8 @@ from .storage import PodcastStorage, make_feed_id, normalize_rss_url
 
 _LOGGER = logging.getLogger(__name__)
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 INITIAL_FEED_RETRY_ERROR_CODES = {"cannot_connect", "http_error", "redirect_loop", "ssl_error", "timeout"}
 
 # Home Assistant service targets are exposed as data["entity_id"] for these

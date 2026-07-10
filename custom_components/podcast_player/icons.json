@@ -1,0 +1,62 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "has_unplayed_episodes": {
+        "default": "mdi:podcast"
+      }
+    },
+    "button": {
+      "mark_current_played": {
+        "default": "mdi:check-circle-outline"
+      },
+      "play_latest_episode": {
+        "default": "mdi:play-circle-outline"
+      },
+      "play_next_unplayed": {
+        "default": "mdi:playlist-play"
+      },
+      "refresh_feeds": {
+        "default": "mdi:refresh"
+      }
+    },
+    "sensor": {
+      "current_episode": {
+        "default": "mdi:playlist-play"
+      },
+      "current_feed": {
+        "default": "mdi:rss-box"
+      },
+      "current_output": {
+        "default": "mdi:speaker",
+        "state": {
+          "browser": "mdi:web",
+          "speaker": "mdi:speaker"
+        }
+      },
+      "current_position": {
+        "default": "mdi:progress-clock"
+      },
+      "current_progress": {
+        "default": "mdi:percent"
+      },
+      "feed": {
+        "default": "mdi:podcast"
+      },
+      "feeds": {
+        "default": "mdi:rss"
+      },
+      "latest_by_feed": {
+        "default": "mdi:format-list-bulleted"
+      },
+      "latest_episode": {
+        "default": "mdi:playlist-music"
+      },
+      "playback_speed": {
+        "default": "mdi:speedometer"
+      },
+      "unplayed": {
+        "default": "mdi:podcast"
+      }
+    }
+  }
+}
