@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 import aiohttp
+from aiopodcast import PodcastClient, PodcastFeedError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -33,7 +34,7 @@ from .external_control import (
     ExternalPlaybackStatus,
     current_media_matches_session,
 )
-from .feed_parser import PodcastParseError, parse_podcast_feed
+from .feed_parser import PodcastParseError, normalize_podcast, podcast_parse_error
 from .speaker_proxy import make_signed_speaker_artwork_proxy_url, make_signed_speaker_proxy_url
 from .storage import PodcastStorage, default_external_session, make_feed_id, normalize_rss_url, stable_hash, utcnow_iso
 from .targets import UNAVAILABLE_MEDIA_PLAYER_STATES, is_external_media_player_entity_id, output_target_status
@@ -48,24 +49,6 @@ EXTERNAL_POLL_SECONDS = 5
 EXTERNAL_STARTUP_GRACE_SECONDS = 30
 
 
-async def _async_fetch_feed_text(session: aiohttp.ClientSession, rss_url: str) -> tuple[str, str]:
-    """Fetch raw feed text and return text plus final URL."""
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"}
-    async with session.get(rss_url, headers=headers, timeout=FEED_FETCH_TIMEOUT, allow_redirects=True) as resp:
-        if resp.status >= 400:
-            raise PodcastParseError("http_error", f"Feed server returned HTTP {resp.status}.")
-        total = 0
-        chunks: list[bytes] = []
-        async for chunk in resp.content.iter_chunked(64 * 1024):
-            total += len(chunk)
-            if total > MAX_FEED_BODY_BYTES:
-                raise PodcastParseError("too_large", "Feed is larger than the 10 MB safety limit.")
-            chunks.append(chunk)
-        raw = b"".join(chunks)
-        encoding = resp.charset or "utf-8"
-        return raw.decode(encoding, errors="replace"), str(resp.url)
-
-
 async def async_fetch_and_parse_feed(hass: HomeAssistant, rss_url: str, feed_id: str | None = None) -> dict[str, Any]:
     """Fetch and parse a feed URL without mutating integration storage."""
     try:
@@ -73,20 +56,17 @@ async def async_fetch_and_parse_feed(hass: HomeAssistant, rss_url: str, feed_id:
     except ValueError as err:
         raise PodcastParseError("invalid_url", str(err)) from err
 
+    client = PodcastClient(
+        async_get_clientsession(hass),
+        timeout=FEED_FETCH_TIMEOUT,
+        maximum_feed_bytes=MAX_FEED_BODY_BYTES,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*"},
+    )
     try:
-        raw_text, final_url = await _async_fetch_feed_text(async_get_clientsession(hass), normalized_url)
-    except asyncio.TimeoutError as err:
-        raise PodcastParseError("timeout", "Feed server timed out.") from err
-    except aiohttp.ClientSSLError as err:
-        raise PodcastParseError("ssl_error", str(err)) from err
-    except aiohttp.TooManyRedirects as err:
-        raise PodcastParseError("redirect_loop", "Feed redirects too many times.") from err
-    except aiohttp.ClientError as err:
-        raise PodcastParseError("cannot_connect", str(err)) from err
-
-    parsed = await hass.async_add_executor_job(parse_podcast_feed, raw_text, normalized_url, feed_id or make_feed_id(normalized_url))
-    parsed["canonical_url"] = final_url
-    return parsed
+        podcast = await client.async_fetch(normalized_url)
+    except PodcastFeedError as err:
+        raise podcast_parse_error(err) from err
+    return normalize_podcast(podcast, feed_id or make_feed_id(normalized_url))
 
 
 async def async_validate_feed_url(hass: HomeAssistant, rss_url: str) -> None:
@@ -125,7 +105,6 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             config_entry=entry,
         )
         self.storage = storage
-        self._session = async_get_clientsession(hass)
         self._refresh_lock = asyncio.Lock()
         self._refresh_sem = asyncio.Semaphore(MAX_PARALLEL_REFRESHES)
         self._external_control = DlnaAvTransportController()
@@ -175,10 +154,6 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:  # noqa: BLE001 - coordinator must keep HA alive
             raise translated_error(UpdateFailed, "feed_refresh_failed") from err
         return self.storage.snapshot()
-
-    async def async_fetch_feed_text(self, rss_url: str) -> tuple[str, str]:
-        """Fetch raw feed text and return text plus final URL."""
-        return await _async_fetch_feed_text(self._session, rss_url)
 
     async def async_add_feed(self, rss_url: str) -> dict[str, Any]:
         """Add and immediately refresh a feed."""

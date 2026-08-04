@@ -93,12 +93,8 @@ rules:
     comment: The integration has one static device registry device and dynamic feed entities.
 
   # Platinum
-  async-dependency:
-    status: todo
-    comment: Replace or isolate synchronous feed parsing so dependency usage satisfies async requirements.
-  inject-websession:
-    status: exempt
-    comment: Network I/O uses Home Assistant aiohttp sessions directly; the parser dependency performs no HTTP I/O.
+  async-dependency: done
+  inject-websession: done
   strict-typing:
     status: todo
     comment: Add strict typing and resolve all typing issues.

@@ -7,6 +7,7 @@
 - Added a Media Source MVP for Home Assistant Media Browser playback.
 - Hardened media-player output to avoid unsafe Home Assistant internal object control paths.
 - Added card picker variants for player, player plus latest episodes, and latest episodes only.
+- Replaced synchronous feed parsing with the typed asynchronous `aio-podcast` client.
 
 ## 0.2.31
 

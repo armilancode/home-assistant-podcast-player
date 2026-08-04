@@ -1,204 +1,130 @@
-"""Tests for Podcast Player RSS parsing."""
+"""Tests for podcast dependency model normalization."""
+
+from datetime import UTC, datetime
 
 import pytest
-
-from custom_components.podcast_player.feed_parser import (
-    PodcastParseError,
-    _as_text,
-    _duration_to_seconds,
-    _get_first,
-    _image_from_obj,
-    _is_audio_enclosure,
-    _parse_datetime,
-    _pick_audio,
-    parse_podcast_feed,
+from aiopodcast import (
+    FeedTooLargeError,
+    InvalidFeedError,
+    NoEpisodesError,
+    NoPlayableEpisodesError,
+    Podcast,
+    PodcastConnectionError,
+    PodcastEnclosure,
+    PodcastEpisode,
+    PodcastFeedError,
+    PodcastHTTPError,
+    PodcastRedirectError,
+    PodcastSSLError,
+    PodcastTimeoutError,
 )
 
-SAMPLE_RSS = """<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
-  <channel>
-    <title>Example Podcast</title>
-    <link>https://example.com/podcast</link>
-    <itunes:author>Example Host</itunes:author>
-    <itunes:image href="https://example.com/feed.jpg" />
-    <item>
-      <guid>episode-1</guid>
-      <title>Episode One</title>
-      <pubDate>Thu, 25 Jun 2026 10:00:00 +0000</pubDate>
-      <itunes:duration>1:02:03</itunes:duration>
-      <enclosure url="/audio/episode-1.mp3" type="audio/mpeg" length="12345" />
-    </item>
-  </channel>
-</rss>
-"""
+from custom_components.podcast_player.feed_parser import normalize_podcast, podcast_parse_error
+from custom_components.podcast_player.storage import make_episode_id
 
 
-def test_parse_podcast_feed_normalizes_feed_and_episode() -> None:
-    """RSS feeds are normalized into stable feed and episode payloads."""
-    parsed = parse_podcast_feed(SAMPLE_RSS, "https://example.com/feed.xml", "feed_abc")
+def test_normalize_podcast_preserves_storage_contract() -> None:
+    """Typed podcast models are converted without changing persisted field shapes."""
+    published = datetime(2026, 6, 25, 10, tzinfo=UTC)
+    podcast = Podcast(
+        source_url="https://example.test/feed.xml",
+        canonical_url="https://cdn.example.test/feed.xml",
+        title="Example Podcast",
+        description="Feed description",
+        author="Example Host",
+        website_url="https://example.test/podcast",
+        artwork_url="https://example.test/feed.jpg",
+        episodes=(
+            PodcastEpisode(
+                title="Episode One",
+                enclosure=PodcastEnclosure(
+                    "https://cdn.example.test/episode-1.mp3",
+                    mime_type="audio/mpeg",
+                    length=12345,
+                ),
+                guid="episode-1",
+                description="Episode description",
+                published=published,
+                duration_seconds=3723,
+                artwork_url="https://example.test/episode.jpg",
+                website_url="https://example.test/episodes/1",
+                explicit="no",
+                season="2",
+                episode_number="7",
+            ),
+            PodcastEpisode(
+                title="Episode Two",
+                enclosure=PodcastEnclosure("https://cdn.example.test/episode-2.ogg"),
+            ),
+        ),
+    )
 
-    assert parsed["feed"]["title"] == "Example Podcast"
-    assert parsed["feed"]["author"] == "Example Host"
-    assert len(parsed["episodes"]) == 1
+    normalized = normalize_podcast(podcast, "feed_abc")
 
-    episode = parsed["episodes"][0]
-    assert episode["feed_id"] == "feed_abc"
-    assert episode["guid"] == "episode-1"
-    assert episode["title"] == "Episode One"
-    assert episode["duration_seconds"] == 3723
-    assert episode["audio_url"] == "https://example.com/audio/episode-1.mp3"
-    assert episode["audio_type"] == "audio/mpeg"
-
-
-def test_small_feed_parser_helpers() -> None:
-    """Small parser helpers normalize empty values and common podcast formats."""
-    assert _get_first({"a": "", "b": "value"}, "a", "b") == "value"
-    assert _get_first({"a": None}, "a", default="fallback") == "fallback"
-    assert _as_text(None) is None
-    assert _as_text("  title  ") == "title"
-    assert _as_text(123) == "123"
-
-    assert _parse_datetime(None) is None
-    assert _parse_datetime((2026, 1, 2, 3, 4, 5, 0, 0, 0)) == "2026-01-02T03:04:05+00:00"
-    assert _parse_datetime((2026, 99, 2, 3, 4, 5, 0, 0, 0)) is None
-    assert _parse_datetime("Thu, 25 Jun 2026 10:00:00 +0000") == "2026-06-25T10:00:00+00:00"
-    assert _parse_datetime("Thu, 25 Jun 2026 10:00:00") == "2026-06-25T10:00:00+00:00"
-    assert _parse_datetime("not-a-date") is None
-    assert _parse_datetime(12345) is None
-
-    assert _duration_to_seconds(None) is None
-    assert _duration_to_seconds("") is None
-    assert _duration_to_seconds("   ") is None
-    assert _duration_to_seconds(12.9) == 12
-    assert _duration_to_seconds("90") == 90
-    assert _duration_to_seconds("01:02:03") == 3723
-    assert _duration_to_seconds("02:03") == 123
-    assert _duration_to_seconds("bad") is None
-    assert _duration_to_seconds("1:2:3:4") is None
-
-
-def test_image_helpers_read_common_feedparser_shapes() -> None:
-    """Image helper accepts the common image structures emitted by feedparser."""
-    assert _image_from_obj(None) is None
-    assert _image_from_obj({"image": {"href": "https://example.test/image.jpg"}}) == "https://example.test/image.jpg"
-    assert _image_from_obj({"image": {"url": "https://example.test/image.jpg"}}) == "https://example.test/image.jpg"
-    assert _image_from_obj({"images": [{"url": "https://example.test/images.jpg"}]}) == "https://example.test/images.jpg"
-    assert _image_from_obj({"media_thumbnail": [{"url": "https://example.test/thumb.jpg"}]}) == "https://example.test/thumb.jpg"
-    assert _image_from_obj({"itunes_image": "https://example.test/itunes.jpg"}) == "https://example.test/itunes.jpg"
-    assert _image_from_obj({"images": ["bad"], "media_thumbnail": ["bad"]}) is None
-    assert _image_from_obj(
-        {
-            "image": {"href": ""},
-            "images": [{"href": ""}, {"url": "https://example.test/second.jpg"}],
-        }
-    ) == "https://example.test/second.jpg"
-    assert _image_from_obj(
-        {
-            "media_thumbnail": [{"url": ""}],
-            "image_href": "https://example.test/fallback.jpg",
-        }
-    ) == "https://example.test/fallback.jpg"
-
-
-def test_audio_pick_helpers_accept_mime_types_and_extensions() -> None:
-    """Audio helpers accept podcast audio MIME types, audio prefixes, and known extensions."""
-    assert _is_audio_enclosure({}) is False
-    assert _is_audio_enclosure({"url": "https://example.test/file.mp3"}) is True
-    assert _is_audio_enclosure({"href": "https://example.test/file.bin", "type": "audio/custom"}) is True
-    assert _is_audio_enclosure({"href": "https://example.test/file.bin", "type": "application/octet-stream"}) is False
-
-    assert _pick_audio(
-        {
-            "media_content": [
-                {
-                    "url": "/episode.m4a?download=1",
-                    "type": "application/octet-stream",
-                    "fileSize": "456",
-                }
-            ]
-        },
-        "https://example.test/feed.xml",
-    ) == {
-        "audio_url": "https://example.test/episode.m4a?download=1",
-        "audio_type": "application/octet-stream",
-        "audio_size": "456",
+    assert normalized["feed"] == {
+        "feed_id": "feed_abc",
+        "rss_url": "https://example.test/feed.xml",
+        "title": "Example Podcast",
+        "description": "Feed description",
+        "author": "Example Host",
+        "website": "https://example.test/podcast",
+        "artwork_url": "https://example.test/feed.jpg",
+        "status": "ok",
+        "last_error": None,
+        "episode_count": 2,
     }
-    assert _pick_audio(
-        {
-            "links": [
-                {"href": "https://example.test/page", "rel": "related"},
-                {"href": "/audio.ogg", "rel": "alternate", "type": "audio/ogg", "length": "123"},
-            ]
-        },
-        "https://example.test/feed.xml",
-    )["audio_url"] == "https://example.test/audio.ogg"
-    assert _pick_audio({"enclosures": [{"href": ""}], "links": "bad"}, "https://example.test/feed.xml") is None
-    assert _pick_audio(
-        {
-            "enclosures": "bad",
-            "media_content": "bad",
-            "links": [None, {"href": "/clip.wav", "rel": "", "length": "321"}],
-        },
-        "https://example.test/feed.xml",
-    )["audio_url"] == "https://example.test/clip.wav"
+    assert normalized["canonical_url"] == "https://cdn.example.test/feed.xml"
+
+    first = normalized["episodes"][0]
+    assert first == {
+        "episode_id": make_episode_id(
+            "feed_abc",
+            "episode-1",
+            "https://cdn.example.test/episode-1.mp3",
+            "Episode One",
+            "2026-06-25T10:00:00+00:00",
+        ),
+        "feed_id": "feed_abc",
+        "guid": "episode-1",
+        "title": "Episode One",
+        "description": "Episode description",
+        "published": "2026-06-25T10:00:00+00:00",
+        "duration_seconds": 3723,
+        "audio_url": "https://cdn.example.test/episode-1.mp3",
+        "audio_type": "audio/mpeg",
+        "audio_size": "12345",
+        "artwork_url": "https://example.test/episode.jpg",
+        "website_url": "https://example.test/episodes/1",
+        "explicit": "no",
+        "season": "2",
+        "episode_number": "7",
+    }
+
+    second = normalized["episodes"][1]
+    assert second["published"] is None
+    assert second["audio_size"] is None
+    assert second["artwork_url"] == "https://example.test/feed.jpg"
 
 
-def test_parse_podcast_feed_uses_fallbacks_and_skips_bad_entries() -> None:
-    """Parser handles fallback feed/episode fields and skips entries without audio."""
-    raw = """<?xml version="1.0" encoding="UTF-8"?>
-    <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
-      <channel>
-        <itunes:title>Fallback Podcast</itunes:title>
-        <description>Feed description</description>
-        <publisher>Publisher Name</publisher>
-        <image><url>https://example.test/feed.jpg</url></image>
-        <item>
-          <title>No Audio</title>
-        </item>
-        <item>
-          <title></title>
-          <updated>Thu, 25 Jun 2026 10:00:00 +0000</updated>
-          <description>Episode description</description>
-          <itunes:season>2</itunes:season>
-          <itunes:episode>7</itunes:episode>
-          <itunes:explicit>no</itunes:explicit>
-          <link>https://example.test/episode-page</link>
-          <enclosure url="https://cdn.example.test/episode.aac" type="audio/aac" length="789" />
-        </item>
-      </channel>
-    </rss>
-    """
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (NoEpisodesError("No episodes"), "no_episodes"),
+        (NoPlayableEpisodesError("No playable episodes"), "no_audio_enclosures"),
+        (InvalidFeedError("Invalid XML"), "parse_error"),
+        (FeedTooLargeError(1024), "too_large"),
+        (PodcastHTTPError(503), "http_error"),
+        (PodcastTimeoutError("Timed out"), "timeout"),
+        (PodcastSSLError("TLS failed"), "ssl_error"),
+        (PodcastRedirectError("Too many redirects"), "redirect_loop"),
+        (PodcastConnectionError("Offline"), "cannot_connect"),
+        (PodcastFeedError("Unknown feed failure"), "parse_error"),
+    ],
+)
+def test_podcast_parse_error_maps_dependency_failures(error: PodcastFeedError, code: str) -> None:
+    """Dependency exceptions retain stable codes used by flows, events, and storage."""
+    mapped = podcast_parse_error(error)
 
-    parsed = parse_podcast_feed(raw, "https://example.test/feed.xml", "feed_1")
-
-    assert parsed["feed"]["title"] == "Fallback Podcast"
-    assert parsed["feed"]["description"] == "Feed description"
-    assert parsed["feed"]["author"] == "Publisher Name"
-    assert parsed["feed"]["episode_count"] == 1
-    episode = parsed["episodes"][0]
-    assert episode["title"] == "Untitled episode"
-    assert episode["description"] == "Episode description"
-    assert episode["published"] == "2026-06-25T10:00:00+00:00"
-    assert episode["season"] == "2"
-    assert episode["episode_number"] == "7"
-    assert episode["explicit"] is None
-    assert episode["website_url"] == "https://example.test/episode-page"
-
-
-def test_parse_podcast_feed_reports_invalid_feed_shapes() -> None:
-    """Parser raises user-facing parse errors for empty or unplayable feeds."""
-    with pytest.raises(PodcastParseError) as no_entries:
-        parse_podcast_feed("<rss><channel><title>Empty</title></channel></rss>", "https://example.test/feed.xml", "feed_1")
-    assert no_entries.value.code == "no_episodes"
-
-    with pytest.raises(PodcastParseError) as no_audio:
-        parse_podcast_feed(
-            "<rss><channel><title>No Audio</title><item><title>Episode</title></item></channel></rss>",
-            "https://example.test/feed.xml",
-            "feed_1",
-        )
-    assert no_audio.value.code == "no_audio_enclosures"
-
-    with pytest.raises(PodcastParseError) as parse_error:
-        parse_podcast_feed("not xml <", "https://example.test/feed.xml", "feed_1")
-    assert parse_error.value.code == "parse_error"
+    assert mapped.code == code
+    assert mapped.message == str(error)
+    assert str(mapped) == str(error)

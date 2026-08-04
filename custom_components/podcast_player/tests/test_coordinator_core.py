@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
+from aiopodcast import PodcastConnectionError, PodcastRedirectError, PodcastSSLError, PodcastTimeoutError
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -23,15 +24,27 @@ from custom_components.podcast_player.const import (
 )
 from custom_components.podcast_player.coordinator import (
     EXTERNAL_STARTUP_GRACE_SECONDS,
-    MAX_FEED_BODY_BYTES,
     PodcastUpdateCoordinator,
-    _async_fetch_feed_text,
     async_fetch_and_parse_feed,
     async_validate_feed_url,
 )
 from custom_components.podcast_player.external_control import ExternalPlaybackStatus
 from custom_components.podcast_player.feed_parser import PodcastParseError
 from custom_components.podcast_player.storage import PodcastStorage, default_data, make_feed_id
+
+SAMPLE_RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Example Podcast</title>
+    <itunes:author>Example Host</itunes:author>
+    <item>
+      <guid>episode-1</guid>
+      <title>Episode One</title>
+      <enclosure url="/audio/episode-1.mp3" type="audio/mpeg" length="12345" />
+    </item>
+  </channel>
+</rss>
+"""
 
 
 class FakeContent:
@@ -118,10 +131,6 @@ class FakeHass:
         self.bus = FakeBus()
         self.tasks: list[asyncio.Task] = []
 
-    async def async_add_executor_job(self, func, *args):
-        """Run executor jobs inline for tests."""
-        return func(*args)
-
     def async_create_task(self, coro):
         """Create and record background tasks."""
         task = asyncio.create_task(coro)
@@ -198,70 +207,39 @@ def _seed_library(storage: PodcastStorage) -> None:
     }
 
 
-def _client_ssl_error() -> aiohttp.ClientSSLError:
-    """Return an aiohttp SSL error with enough connection metadata for str()."""
-    return aiohttp.ClientSSLError(
-        SimpleNamespace(host="example.test", port=443, ssl=True),
-        OSError(1, "certificate failed"),
-    )
-
-
-@pytest.mark.asyncio
-async def test_async_fetch_feed_text_success_and_safety_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Feed text fetch handles successful, HTTP error, and oversized responses."""
-    session = FakeSession(FakeResponse(chunks=[b"hello", b" world"], charset=None))
-
-    text, final_url = await _async_fetch_feed_text(session, "https://example.test/feed.xml")
-
-    assert text == "hello world"
-    assert final_url == "https://final.example.test/feed.xml"
-    assert session.calls[0][1]["allow_redirects"] is True
-
-    with pytest.raises(PodcastParseError, match="HTTP 500"):
-        await _async_fetch_feed_text(FakeSession(FakeResponse(status=500)), "https://example.test/feed.xml")
-
-    monkeypatch.setattr("custom_components.podcast_player.coordinator.MAX_FEED_BODY_BYTES", 3)
-    with pytest.raises(PodcastParseError, match="10 MB"):
-        await _async_fetch_feed_text(
-            FakeSession(FakeResponse(chunks=[b"ab", b"cd"])),
-            "https://example.test/feed.xml",
-        )
-    monkeypatch.setattr("custom_components.podcast_player.coordinator.MAX_FEED_BODY_BYTES", MAX_FEED_BODY_BYTES)
-
-
 @pytest.mark.asyncio
 async def test_async_fetch_and_parse_feed_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Feed fetch helper normalizes URLs, parses feeds, and records final URL."""
-    fetch = AsyncMock(return_value=("<rss />", "https://final.example.test/feed.xml"))
-    monkeypatch.setattr("custom_components.podcast_player.coordinator.async_get_clientsession", lambda hass: object())
-    monkeypatch.setattr("custom_components.podcast_player.coordinator._async_fetch_feed_text", fetch)
-    monkeypatch.setattr(
-        "custom_components.podcast_player.coordinator.parse_podcast_feed",
-        lambda raw, rss_url, feed_id: {"feed": {"feed_id": feed_id, "rss_url": rss_url}, "episodes": []},
-    )
+    """Feed fetch uses the injected session and normalizes typed dependency output."""
+    session = FakeSession(FakeResponse(chunks=[SAMPLE_RSS]))
+    monkeypatch.setattr("custom_components.podcast_player.coordinator.async_get_clientsession", lambda hass: session)
     hass = FakeHass()
 
     result = await async_fetch_and_parse_feed(hass, "https://Example.test/feed.xml", "feed_1")
 
-    assert result["feed"] == {"feed_id": "feed_1", "rss_url": "https://example.test/feed.xml"}
+    assert result["feed"]["feed_id"] == "feed_1"
+    assert result["feed"]["rss_url"] == "https://example.test/feed.xml"
+    assert result["feed"]["title"] == "Example Podcast"
+    assert result["episodes"][0]["audio_url"] == "https://final.example.test/audio/episode-1.mp3"
     assert result["canonical_url"] == "https://final.example.test/feed.xml"
-    fetch.assert_awaited_once()
+    assert session.calls[0][0] == "https://example.test/feed.xml"
+    assert session.calls[0][1]["allow_redirects"] is True
+    assert session.calls[0][1]["headers"]["User-Agent"].startswith("HA-Podcast-Player/")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "code"),
     [
-        (asyncio.TimeoutError(), "timeout"),
-        (_client_ssl_error(), "ssl_error"),
-        (aiohttp.TooManyRedirects(None, ()), "redirect_loop"),
-        (aiohttp.ClientError("cannot connect"), "cannot_connect"),
+        (PodcastTimeoutError("Timed out"), "timeout"),
+        (PodcastSSLError("TLS failed"), "ssl_error"),
+        (PodcastRedirectError("Redirect loop"), "redirect_loop"),
+        (PodcastConnectionError("Cannot connect"), "cannot_connect"),
     ],
 )
 async def test_async_fetch_and_parse_feed_maps_network_errors(monkeypatch: pytest.MonkeyPatch, error: Exception, code: str) -> None:
     """Network exceptions are converted to user-facing feed parse errors."""
     monkeypatch.setattr("custom_components.podcast_player.coordinator.async_get_clientsession", lambda hass: object())
-    monkeypatch.setattr("custom_components.podcast_player.coordinator._async_fetch_feed_text", AsyncMock(side_effect=error))
+    monkeypatch.setattr("custom_components.podcast_player.coordinator.PodcastClient.async_fetch", AsyncMock(side_effect=error))
 
     with pytest.raises(PodcastParseError) as err:
         await async_fetch_and_parse_feed(FakeHass(), "https://example.test/feed.xml")
@@ -997,12 +975,6 @@ async def test_coordinator_lifecycle_fetch_and_refresh_branches(monkeypatch: pyt
 
     assert await coord._async_update_data() == coord.storage.snapshot()
     coord.async_refresh_feeds.assert_awaited_once()
-
-    coord._session = FakeSession(FakeResponse(chunks=[b"<rss />"]))
-    assert await coord.async_fetch_feed_text("https://example.test/feed.xml") == (
-        "<rss />",
-        "https://final.example.test/feed.xml",
-    )
 
     with pytest.raises(PodcastParseError, match="RSS URL"):
         await coord.async_add_feed("ftp://example.test/feed.xml")
