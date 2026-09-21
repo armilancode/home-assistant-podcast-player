@@ -135,6 +135,7 @@ class PodcastPlayerEntity(CoordinatorEntity[PodcastUpdateCoordinator], MediaPlay
             "current_feed_title": feed.get("title"),
             "current_episode_title": episode.get("title"),
             "position": player.get("position"),
+            "position_updated_at": player.get("updated_at"),
             "duration": player.get("duration") or episode.get("duration_seconds"),
             "progress_percent": self._progress_percent(player, episode),
             "playback_speed": player.get("speed"),

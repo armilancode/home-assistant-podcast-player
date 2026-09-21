@@ -195,3 +195,31 @@ test("a passive card displays backend progress instead of stale local audio", ()
   });
   assert.equal(card._resumePositionForEpisode(card._currentEpisode), 220);
 });
+
+test("a passive card advances from the latest backend checkpoint while playing", () => {
+  const card = progressCard();
+  const realDateNow = Date.now;
+  const now = new Date("2026-09-21T12:00:10Z").getTime();
+  card._shared.ownerId = null;
+  card._playerState = () => ({
+    current_episode_id: "ep_test",
+    position: 220,
+    duration: 300,
+    speed: 1.25,
+    state: "playing",
+    position_updated_at: "2026-09-21T12:00:00Z",
+  });
+
+  try {
+    Date.now = () => now;
+    assert.deepEqual(card._displayPositionDuration(), {
+      position: 232.5,
+      duration: 300,
+    });
+    assert.equal(card._shouldRunDisplayClock(), true);
+    card._pageHidden = true;
+    assert.equal(card._shouldRunDisplayClock(), false);
+  } finally {
+    Date.now = realDateNow;
+  }
+});

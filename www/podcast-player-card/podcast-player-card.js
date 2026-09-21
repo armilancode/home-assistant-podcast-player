@@ -27,6 +27,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._connected = false;
     this._pageHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
     this._progressTimer = null;
+    this._displayClockTimer = null;
     this._progressSaveInFlight = null;
     this._progressSaveSequence = 0;
     this._progressDirty = false;
@@ -337,6 +338,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._pageHidden = true;
     if (this._shared) this._shared.lastSeenAt = Date.now();
     this._stopProgressTimer();
+    this._stopDisplayClock();
     this._abandonProgressSave();
     this._syncToShared();
     this._updateMediaSession(true);
@@ -363,6 +365,7 @@ class PodcastPlayerCard extends HTMLElement {
       this._saveProgress(this._isActuallyPlaying());
     }
     if (!this._library && this._hass && !this._loading) this._loadLibrary();
+    this._syncDisplayClock();
     this._updateMediaSession(true);
     this._lastRenderKey = "";
     this._scheduleRender();
@@ -376,12 +379,14 @@ class PodcastPlayerCard extends HTMLElement {
     this._attachConnectionListeners();
     this._claimBrowserAudioSession();
     if (this._isActuallyPlaying()) this._startProgressTimer();
+    this._syncDisplayClock();
   }
 
   _onConnectionDisconnected() {
     this._progressDirty = true;
     this._abandonProgressSave();
     this._stopProgressTimer();
+    this._stopDisplayClock();
   }
 
   _onConnectionReady() {
@@ -392,6 +397,7 @@ class PodcastPlayerCard extends HTMLElement {
     if (this._ownsBrowserAudioSession() && (this._progressDirty || this._isActuallyPlaying())) {
       this._saveProgress(this._isActuallyPlaying());
     }
+    this._syncDisplayClock();
   }
 
   _browserSessionNeedsTakeover() {
@@ -630,6 +636,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._hass = hass;
     if (this._connected) this._attachConnectionListeners();
     this._syncOutputState();
+    this._syncDisplayClock();
     if (!this._library && !this._loading) {
       this._loadLibrary();
     } else {
@@ -670,6 +677,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._detachConnectionListeners();
     this._abandonProgressSave();
     this._stopProgressTimer();
+    this._stopDisplayClock();
     this._clearMediaSession();
   }
 
@@ -746,6 +754,7 @@ class PodcastPlayerCard extends HTMLElement {
       this._syncToShared();
       this._claimBrowserAudioSession();
       if ((!this._audio.paused && !this._audio.ended) || (this._isSpeakerOutput() && !this._isLimitedSpeakerOutput())) this._startProgressTimer();
+      this._syncDisplayClock();
       this._lastRenderKey = "";
     } catch (err) {
       this._error = this._errorText(err);
@@ -801,11 +810,13 @@ class PodcastPlayerCard extends HTMLElement {
 
   _playerState() {
     const base = Object.assign({}, (this._library && this._library.player) || {});
+    if (!base.position_updated_at && base.updated_at) base.position_updated_at = base.updated_at;
     const attrs = this._haPlayerAttributes();
     const map = {
       current_episode_id: "current_episode_id",
       current_feed_id: "current_feed_id",
       position: "position",
+      position_updated_at: "position_updated_at",
       duration: "duration",
       playback_speed: "speed",
       browser_player_state: "state",
@@ -1261,19 +1272,29 @@ class PodcastPlayerCard extends HTMLElement {
     const player = this._playerState();
     const backendIsCurrent = Boolean(ep.episode_id && player.current_episode_id === ep.episode_id);
     const useLocalTiming = this._hasBrowserAudioSession() && Boolean(this._shared.ownerId);
+    let position = Number(
+      (useLocalTiming && this._audio.currentTime) ||
+      (backendIsCurrent && player.position) ||
+      ep.position ||
+      0
+    );
+    const duration = Number(
+      (useLocalTiming && Number.isFinite(this._audio.duration) && this._audio.duration) ||
+      (backendIsCurrent && player.duration) ||
+      ep.duration_seconds ||
+      0
+    );
+    if (!useLocalTiming && backendIsCurrent && player.state === "playing" && player.position_updated_at) {
+      const updatedAt = new Date(player.position_updated_at).getTime();
+      if (Number.isFinite(updatedAt)) {
+        const elapsed = Math.max(0, (Date.now() - updatedAt) / 1000);
+        position += elapsed * (PodcastPlayerCard._normalizeSpeed(player.speed) || 1);
+      }
+    }
+    if (duration > 0) position = Math.min(position, duration);
     return {
-      position: Number(
-        (useLocalTiming && this._audio.currentTime) ||
-        (backendIsCurrent && player.position) ||
-        ep.position ||
-        0
-      ),
-      duration: Number(
-        (useLocalTiming && Number.isFinite(this._audio.duration) && this._audio.duration) ||
-        (backendIsCurrent && player.duration) ||
-        ep.duration_seconds ||
-        0
-      ),
+      position: Math.max(0, position || 0),
+      duration: Math.max(0, duration || 0),
     };
   }
 
@@ -1347,11 +1368,13 @@ class PodcastPlayerCard extends HTMLElement {
 
   _onAudioReady() {
     this._setBrowserLoadState("idle");
+    this._syncDisplayClock();
     this._updateMediaSession();
     this._updateDynamicUi();
   }
 
   _onAudioPlay() {
+    this._syncDisplayClock();
     if (!this._ownsBrowserAudioSession()) return;
     this._saveProgress(true);
   }
@@ -1359,6 +1382,7 @@ class PodcastPlayerCard extends HTMLElement {
   _onAudioPause() {
     this._setBrowserLoadState("idle");
     this._stopProgressTimer();
+    this._stopDisplayClock();
     if (!this._ownsBrowserAudioSession()) return;
     this._saveProgress(false);
     this._updateMediaSession(true);
@@ -1859,6 +1883,39 @@ class PodcastPlayerCard extends HTMLElement {
     this._progressTimer = null;
   }
 
+  _shouldRunDisplayClock() {
+    if (!this._connected || this._pageHidden || !this._currentEpisode) return false;
+    if (this._isSpeakerOutput()) return this._isActuallyPlaying();
+    const useLocalTiming = this._hasBrowserAudioSession() && Boolean(this._shared.ownerId);
+    if (useLocalTiming) return false;
+    const player = this._playerState();
+    return player.current_episode_id === this._currentEpisode.episode_id &&
+      player.state === "playing" && Boolean(player.position_updated_at);
+  }
+
+  _syncDisplayClock() {
+    if (!this._shouldRunDisplayClock()) {
+      this._stopDisplayClock();
+      return;
+    }
+    if (this._displayClockTimer) return;
+    this._displayClockTimer = window.setInterval(() => {
+      if (!this._shouldRunDisplayClock()) {
+        this._stopDisplayClock();
+        return;
+      }
+      this._updateDynamicUi();
+      const timing = this._displayPositionDuration();
+      if (timing.duration > 0 && timing.position >= timing.duration) this._stopDisplayClock();
+    }, 1000);
+  }
+
+  _stopDisplayClock() {
+    if (!this._displayClockTimer) return;
+    window.clearInterval(this._displayClockTimer);
+    this._displayClockTimer = null;
+  }
+
   _abandonProgressSave() {
     this._progressSaveInFlight = null;
   }
@@ -1889,6 +1946,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   async _onEnded() {
     this._stopProgressTimer();
+    this._stopDisplayClock();
     this._setBrowserLoadState("idle");
     const ownsBrowserSession = this._ownsBrowserAudioSession();
     if (this._currentEpisode && ownsBrowserSession) {
