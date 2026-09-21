@@ -81,6 +81,7 @@ class FakeStorage:
         player["current_feed_id"] = "feed_1"
         player["position"] = 25
         player["updated_at"] = "2026-01-02T00:01:00+00:00"
+        player["browser_session_id"] = "session-episode-1"
         player["duration"] = 100
         player["speed"] = 1.25
         player["output_mode"] = "speaker"
@@ -317,6 +318,7 @@ async def test_media_player_entity_reports_status_and_ignores_native_controls() 
     assert entity.media_image_url == "https://example.test/episode.jpg"
     assert entity.extra_state_attributes["progress_percent"] == 25
     assert entity.extra_state_attributes["position_updated_at"] == "2026-01-02T00:01:00+00:00"
+    assert entity.extra_state_attributes["browser_session_id"] == "session-episode-1"
     assert entity.extra_state_attributes["target_media_player"] == "media_player.kitchen"
     assert entity._adjacent_episode(1) is None
 

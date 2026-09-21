@@ -61,6 +61,7 @@ function progressCard() {
   card._currentEpisode = { episode_id: "ep_test", position: 60, duration_seconds: 300 };
   card._shared.currentEpisodeId = "ep_test";
   card._shared.currentEpisode = card._currentEpisode;
+  card._shared.sessionId = "session-test-123";
   card._shared.ownerId = card._instanceId;
   card._audio.src = "https://example.test/episode.mp3";
   card._audio.currentTime = 124;
@@ -97,6 +98,7 @@ test("progress bookkeeping uses the silent websocket command", async () => {
     playing: false,
     speed: 1.25,
     duration: 300,
+    session_id: "session-test-123",
   }]);
 });
 
@@ -222,4 +224,97 @@ test("a passive card advances from the latest backend checkpoint while playing",
   } finally {
     Date.now = realDateNow;
   }
+});
+
+test("claiming playback creates one server-authoritative browser session", async () => {
+  const card = progressCard();
+  const messages = [];
+  card._newBrowserSessionId = () => "session-phone-456";
+  card._hass = {
+    connection: {
+      async sendMessagePromise(message) {
+        messages.push(message);
+        return { claimed: true, session_id: "session-phone-456", position: 240 };
+      },
+    },
+  };
+
+  assert.equal(await card._claimBrowserSession(card._currentEpisode, 239.5, 300), "session-phone-456");
+  assert.equal(card._shared.sessionId, "session-phone-456");
+  assert.equal(card._shared.ownerId, card._instanceId);
+  assert.deepEqual(messages, [{
+    type: "podcast_player/claim_browser_session",
+    episode_id: "ep_test",
+    session_id: "session-phone-456",
+    position: 239.5,
+    duration: 300,
+    speed: 1.25,
+  }]);
+});
+
+test("a browser pauses silently when another device takes over", () => {
+  const card = progressCard();
+  let pauses = 0;
+  card._audio.paused = false;
+  card._audio.pause = () => {
+    pauses += 1;
+    card._audio.paused = true;
+  };
+  card._scheduleRender = () => {};
+  card._playerState = () => ({
+    current_episode_id: "ep_test",
+    state: "playing",
+    output_mode: "browser",
+    browser_session_id: "session-phone-456",
+  });
+
+  card._reconcileBrowserSession();
+
+  assert.equal(pauses, 1);
+  assert.equal(card._audio.paused, true);
+  assert.equal(card._shared.ownerId, null);
+  assert.equal(card._shared.sessionId, null);
+  assert.equal(card._info, "Playback moved to another device.");
+  assert.equal(card._browserSessionNeedsTakeover(), true);
+  assert.equal(card._playPauseLabelForSelected(false), "Take over");
+});
+
+test("the shared session observer stops audio even when the card view is detached", () => {
+  const card = progressCard();
+  let stateChanged;
+  let pauses = 0;
+  card._config = { entity: "media_player.podcast_player" };
+  card._audio.pause = () => {
+    pauses += 1;
+    card._audio.paused = true;
+  };
+  card._hass = {
+    connection: {
+      subscribeEvents(callback, eventType) {
+        assert.equal(eventType, "state_changed");
+        stateChanged = callback;
+        return () => {};
+      },
+    },
+  };
+
+  card._ensureSharedSessionObserver();
+  card.disconnectedCallback();
+  card._audio.paused = false;
+  card._shared.sessionId = "session-pc-123";
+  stateChanged({
+    data: {
+      entity_id: "media_player.podcast_player",
+      new_state: {
+        attributes: {
+          output_mode: "browser",
+          browser_session_id: "session-phone-456",
+        },
+      },
+    },
+  });
+
+  assert.equal(pauses, 1);
+  assert.equal(card._shared.sessionId, null);
+  assert.equal(card._shared.ownerId, null);
 });

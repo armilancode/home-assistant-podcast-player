@@ -22,6 +22,7 @@ from custom_components.podcast_player.api import (
     _public_output_targets,
     _public_settings,
     async_register_api,
+    websocket_claim_browser_session,
     websocket_get_episode,
     websocket_get_library,
     websocket_save_progress,
@@ -410,7 +411,12 @@ def test_async_register_api_registers_once(monkeypatch: pytest.MonkeyPatch) -> N
     async_register_api(hass)
     async_register_api(hass)
 
-    assert commands == [websocket_get_library, websocket_get_episode, websocket_save_progress]
+    assert commands == [
+        websocket_get_library,
+        websocket_get_episode,
+        websocket_claim_browser_session,
+        websocket_save_progress,
+    ]
     assert [type(view) for view in hass.http.views] == [
         PodcastProxyView,
         PodcastSpeakerProxyView,
@@ -509,6 +515,68 @@ async def test_websocket_save_progress_uses_internal_sync_command() -> None:
     coordinator.async_save_progress.assert_awaited_once_with("ep_new", 43.5, 100.0, True, 1.25)
     assert connection.results == [(4, {"saved": True})]
     assert connection.errors == []
+
+
+@pytest.mark.asyncio
+async def test_websocket_claim_browser_session_transfers_ownership() -> None:
+    """A card can atomically claim the single browser playback session."""
+    storage = _storage()
+    coordinator = SimpleNamespace(
+        async_claim_browser_session=AsyncMock(
+            return_value={
+                "browser_session_id": "session-new-123",
+                "position": 44,
+            }
+        )
+    )
+    connection = FakeConnection()
+
+    await websocket_claim_browser_session.__wrapped__(
+        _hass(SimpleNamespace(storage=storage, coordinator=coordinator)),
+        connection,
+        {
+            "id": 6,
+            "episode_id": "ep_new",
+            "session_id": "session-new-123",
+            "position": 43.5,
+            "duration": 100.0,
+            "speed": 1.25,
+        },
+    )
+
+    coordinator.async_claim_browser_session.assert_awaited_once_with(
+        "ep_new", "session-new-123", 43.5, 100.0, 1.25
+    )
+    assert connection.results == [
+        (6, {"claimed": True, "session_id": "session-new-123", "position": 44})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_save_progress_rejects_revoked_browser_session() -> None:
+    """A previous device cannot update state after playback moves elsewhere."""
+    storage = _storage()
+    storage.data["player"]["browser_session_id"] = "session-active-123"
+    storage.data["progress"]["ep_new"] = {"position": 220}
+    coordinator = SimpleNamespace(async_save_progress=AsyncMock())
+    connection = FakeConnection()
+
+    await websocket_save_progress.__wrapped__(
+        _hass(SimpleNamespace(storage=storage, coordinator=coordinator)),
+        connection,
+        {
+            "id": 7,
+            "episode_id": "ep_new",
+            "session_id": "session-revoked-456",
+            "position": 225,
+            "playing": True,
+        },
+    )
+
+    coordinator.async_save_progress.assert_not_awaited()
+    assert connection.results == [
+        (7, {"saved": False, "reason": "not_active_browser_session", "position": 220.0})
+    ]
 
 
 @pytest.mark.asyncio

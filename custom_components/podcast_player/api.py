@@ -223,6 +223,7 @@ def async_register_api(hass: HomeAssistant) -> None:
     if not hass.data.get(REGISTERED_WS_KEY):
         websocket_api.async_register_command(hass, websocket_get_library)
         websocket_api.async_register_command(hass, websocket_get_episode)
+        websocket_api.async_register_command(hass, websocket_claim_browser_session)
         websocket_api.async_register_command(hass, websocket_save_progress)
         hass.data[REGISTERED_WS_KEY] = True
 
@@ -366,12 +367,52 @@ async def websocket_get_episode(hass: HomeAssistant, connection: websocket_api.A
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): "podcast_player/claim_browser_session",
+        vol.Required("episode_id"): str,
+        vol.Required("session_id"): vol.All(str, vol.Length(min=8, max=128)),
+        vol.Required("position"): vol.Coerce(float),
+        vol.Optional("duration"): vol.Coerce(float),
+        vol.Optional("speed"): vol.All(vol.Coerce(float), vol.In(ALLOWED_SPEEDS)),
+    }
+)
+@websocket_api.async_response
+async def websocket_claim_browser_session(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Atomically transfer browser playback ownership to one card session."""
+    runtime = get_runtime(hass)
+    if runtime is None:
+        connection.send_error(msg["id"], "not_configured", "Podcast Player is not configured")
+        return
+
+    player = await runtime.coordinator.async_claim_browser_session(
+        msg["episode_id"],
+        msg["session_id"],
+        msg["position"],
+        msg.get("duration"),
+        msg.get("speed"),
+    )
+    connection.send_result(
+        msg["id"],
+        {
+            "claimed": True,
+            "session_id": player.get("browser_session_id"),
+            "position": player.get("position"),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): "podcast_player/save_progress",
         vol.Required("episode_id"): str,
         vol.Required("position"): vol.Coerce(float),
         vol.Optional("duration"): vol.Coerce(float),
         vol.Optional("playing"): bool,
         vol.Optional("speed"): vol.All(vol.Coerce(float), vol.In(ALLOWED_SPEEDS)),
+        vol.Optional("session_id"): vol.All(str, vol.Length(min=8, max=128)),
     }
 )
 @websocket_api.async_response
@@ -380,6 +421,19 @@ async def websocket_save_progress(hass: HomeAssistant, connection: websocket_api
     runtime = get_runtime(hass)
     if runtime is None:
         connection.send_error(msg["id"], "not_configured", "Podcast Player is not configured")
+        return
+
+    active_session_id = runtime.storage.data.get("player", {}).get("browser_session_id")
+    if active_session_id and msg.get("session_id") != active_session_id:
+        current = runtime.storage.data.get("progress", {}).get(msg["episode_id"], {})
+        connection.send_result(
+            msg["id"],
+            {
+                "saved": False,
+                "reason": "not_active_browser_session",
+                "position": float(current.get("position") or 0),
+            },
+        )
         return
 
     # Card checkpoints are monotonic. A paused/background tab may wake with an

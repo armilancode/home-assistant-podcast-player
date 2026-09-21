@@ -51,6 +51,7 @@ def test_default_player_has_external_session() -> None:
     assert data["settings"]["enhanced_dlna_controls"] is True
     assert data["player"]["external_session"] == default_external_session()
     assert data["player"]["external_session"]["active"] is False
+    assert data["player"]["browser_session_id"] is None
 
 
 def test_async_load_persists_new_default_keys() -> None:

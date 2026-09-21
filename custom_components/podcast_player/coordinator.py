@@ -368,7 +368,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "last_error": None,
             }
         )
-        self.storage.data["player"]["external_session"] = session
+        player = self.storage.data["player"]
+        player["external_session"] = session
+        self._clear_browser_session(player)
         return session
 
     def _clear_external_session(self, reason: str | None = None) -> None:
@@ -653,10 +655,65 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self.storage.set_player_state("playing", episode_id)
         player = self.storage.data["player"]
+        self._clear_browser_session(player)
         self._set_browser_output(player)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
         self.hass.bus.async_fire(EVENT_PLAYBACK_STARTED, {"episode_id": episode_id, "output_mode": "browser"})
+
+    async def async_claim_browser_session(
+        self,
+        episode_id: str,
+        session_id: str,
+        position: float,
+        duration: float | None = None,
+        speed: float | None = None,
+    ) -> dict[str, Any]:
+        """Transfer browser playback ownership to one frontend session."""
+        if not self.storage.get_episode(episode_id):
+            raise translated_error(
+                ServiceValidationError, "episode_not_found", episode_id=episode_id
+            )
+        player = self.storage.data["player"]
+        external_session = self._external_session()
+        previous_target = (
+            player.get("target_media_player")
+            if player.get("output_mode") == "speaker"
+            else external_session.get("target_media_player")
+            if external_session.get("active")
+            else None
+        )
+        if previous_target:
+            try:
+                await self.async_stop_media_player(str(previous_target))
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Podcast Player could not stop previous speaker %s before browser takeover: %s",
+                    previous_target,
+                    err,
+                )
+                raise translated_error(
+                    HomeAssistantError, "previous_target_stop_failed"
+                ) from err
+
+        self.storage.save_progress(
+            episode_id,
+            position,
+            duration,
+            playing=True,
+            speed=speed,
+        )
+        player = self.storage.data["player"]
+        self._set_browser_output(player)
+        player["browser_session_id"] = session_id
+        player["browser_session_updated_at"] = utcnow_iso()
+        await self.storage.async_save()
+        self.async_set_updated_data(self.storage.snapshot())
+        self.hass.bus.async_fire(
+            EVENT_PLAYBACK_STARTED,
+            {"episode_id": episode_id, "output_mode": "browser"},
+        )
+        return player
 
     async def async_pause(self) -> None:
         """Pause current episode or target speaker when applicable."""
@@ -727,7 +784,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.async_stop_media_player(str(target), force=force)
             return
         self.storage.set_player_state("idle")
-        self._set_browser_output(self.storage.data["player"])
+        player = self.storage.data["player"]
+        self._clear_browser_session(player)
+        self._set_browser_output(player)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
 
@@ -1469,6 +1528,12 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         player["speaker_media_content_type"] = None
         player["speaker_last_error"] = None
         self._clear_external_session()
+
+    @staticmethod
+    def _clear_browser_session(player: dict[str, Any]) -> None:
+        """Clear browser ownership when no frontend owns playback."""
+        player["browser_session_id"] = None
+        player["browser_session_updated_at"] = None
 
     def active_feed_ids(self) -> set[str]:
         """Return active/enabled feed IDs."""

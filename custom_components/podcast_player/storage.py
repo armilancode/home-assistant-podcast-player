@@ -116,6 +116,8 @@ def default_data() -> dict[str, Any]:
             "duration": None,
             "speed": DEFAULT_PLAYBACK_SPEED,
             "updated_at": None,
+            "browser_session_id": None,
+            "browser_session_updated_at": None,
             "output_mode": "browser",
             "target_media_player": None,
             "target_media_player_name": None,

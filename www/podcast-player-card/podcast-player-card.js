@@ -31,6 +31,8 @@ class PodcastPlayerCard extends HTMLElement {
     this._progressSaveInFlight = null;
     this._progressSaveSequence = 0;
     this._progressDirty = false;
+    this._suppressNextPauseSave = false;
+    this._pendingBrowserSessionId = null;
     this._renderTimer = null;
     this._lastDynamicUpdate = 0;
     this._deferRenderUntil = 0;
@@ -89,11 +91,15 @@ class PodcastPlayerCard extends HTMLElement {
         targetMediaPlayer: null,
         targetMediaPlayerName: null,
         sessionId: null,
+        pendingSessionId: null,
         ownerId: null,
         lastSeenAt: 0,
         mediaSessionSupported: PodcastPlayerCard._mediaSessionSupported(),
         mediaSessionEnabled: false,
         mediaSessionEpisodeId: null,
+        sessionObserverConnection: null,
+        sessionObserverEntity: null,
+        sessionObserverUnsubscribe: null,
       };
     }
     return window[key];
@@ -306,6 +312,48 @@ class PodcastPlayerCard extends HTMLElement {
     this._listenedConnection = connection;
   }
 
+  _ensureSharedSessionObserver() {
+    const connection = this._hass && this._hass.connection;
+    const entity = this._config && this._config.entity;
+    if (!connection || !entity || typeof connection.subscribeEvents !== "function") return;
+    if (this._shared.sessionObserverConnection === connection && this._shared.sessionObserverEntity === entity) return;
+
+    const previousUnsubscribe = this._shared.sessionObserverUnsubscribe;
+    if (typeof previousUnsubscribe === "function") previousUnsubscribe();
+    this._shared.sessionObserverConnection = connection;
+    this._shared.sessionObserverEntity = entity;
+    this._shared.sessionObserverUnsubscribe = null;
+
+    const observerConnection = connection;
+    const observerEntity = entity;
+    Promise.resolve(connection.subscribeEvents((event) => {
+      const data = (event && event.data) || {};
+      if (data.entity_id !== observerEntity || !data.new_state) return;
+      const attrs = data.new_state.attributes || {};
+      const localSessionId = this._shared.sessionId || null;
+      if (!localSessionId) return;
+      const remoteSessionId = attrs.browser_session_id || null;
+      if (remoteSessionId && remoteSessionId === this._shared.pendingSessionId) {
+        this._shared.pendingSessionId = null;
+      }
+      if (localSessionId === this._shared.pendingSessionId && remoteSessionId !== localSessionId) return;
+      if (attrs.output_mode !== "speaker" && remoteSessionId === localSessionId) return;
+
+      this._shared.ownerId = null;
+      this._shared.sessionId = null;
+      this._shared.pendingSessionId = null;
+      if (this._audio && !this._audio.paused && typeof this._audio.pause === "function") this._audio.pause();
+    }, "state_changed")).then((unsubscribe) => {
+      if (this._shared.sessionObserverConnection === observerConnection && this._shared.sessionObserverEntity === observerEntity) {
+        this._shared.sessionObserverUnsubscribe = unsubscribe;
+      } else if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    }).catch((err) => {
+      console.debug("Podcast browser session observer unavailable", err);
+    });
+  }
+
   _detachConnectionListeners() {
     const connection = this._listenedConnection;
     if (!connection || typeof connection.removeEventListener !== "function") {
@@ -404,14 +452,62 @@ class PodcastPlayerCard extends HTMLElement {
     if (this._isSpeakerOutput() || this._preferredSpeakerTarget() || !this._currentEpisode) return false;
     const player = this._playerState();
     if (player.current_episode_id !== this._currentEpisode.episode_id) return false;
+    if (player.browser_session_id && player.browser_session_id !== this._shared.sessionId) return true;
     if (player.state !== "playing") return false;
     const hasLocalAudio = Boolean(this._audio && this._audio.src && this._hasBrowserAudioSession());
     const localPlaying = hasLocalAudio && !this._audio.paused && !this._audio.ended;
     return !localPlaying;
   }
 
+  _ownsBackendBrowserSession() {
+    const player = this._playerState();
+    return Boolean(player.browser_session_id) && player.browser_session_id === this._shared.sessionId;
+  }
+
+  _reconcileBrowserSession() {
+    if (!this._shared || !this._audio) return;
+    const player = this._playerState();
+    const remoteSessionId = player.browser_session_id || null;
+    const localSessionId = this._shared.sessionId || null;
+    const pendingSessionId = this._shared.pendingSessionId || this._pendingBrowserSessionId;
+    const movedToSpeaker = this._isSpeakerOutput() && localSessionId;
+    if (movedToSpeaker) {
+      this._relinquishLocalBrowserPlayback("Playback moved to the selected speaker.");
+      return;
+    }
+    if (remoteSessionId && remoteSessionId === pendingSessionId) {
+      this._pendingBrowserSessionId = null;
+      this._shared.pendingSessionId = null;
+    }
+    if (localSessionId && localSessionId === pendingSessionId && remoteSessionId !== localSessionId) return;
+    const takenByAnotherBrowser = Boolean(localSessionId && remoteSessionId !== localSessionId);
+    if (!takenByAnotherBrowser) return;
+
+    this._relinquishLocalBrowserPlayback();
+  }
+
+  _relinquishLocalBrowserPlayback(message = "Playback moved to another device.") {
+    // Relinquish local ownership before pausing. The shared pause event then
+    // cannot publish a false pause over the newly active remote session.
+    this._shared.ownerId = null;
+    this._shared.sessionId = null;
+    this._shared.pendingSessionId = null;
+    this._pendingBrowserSessionId = null;
+    this._stopProgressTimer();
+    this._stopDisplayClock();
+    if (!this._audio.paused) this._audio.pause();
+    this._setBrowserLoadState("idle");
+    this._clearMediaSession();
+    this._info = message;
+    this._lastRenderKey = "";
+    this._scheduleRender();
+  }
+
   _browserSessionNotice() {
     if (!this._browserSessionNeedsTakeover()) return "";
+    if (!this._ownsBackendBrowserSession()) {
+      return "Playback belongs to another device. Press Take over to move it here.";
+    }
     if (this._audio && this._audio.src) {
       return "Browser playback was interrupted while the app was away. Press Resume to continue.";
     }
@@ -582,9 +678,6 @@ class PodcastPlayerCard extends HTMLElement {
     this._shared.targetMediaPlayer = speakerTarget;
     this._shared.targetMediaPlayerName = speakerTarget ? this._speakerTargetName() : null;
     this._shared.lastSeenAt = Date.now();
-    if (!this._isSpeakerOutput() && this._audio && this._audio.src && this._currentEpisode) {
-      this._shared.sessionId = this._shared.sessionId || `${this._currentEpisode.episode_id}:${Date.now()}`;
-    }
     if (!this._fixedOutputTarget) this._shared.preferredOutputTarget = this._preferredOutputTarget || "browser";
   }
 
@@ -634,8 +727,10 @@ class PodcastPlayerCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    this._ensureSharedSessionObserver();
     if (this._connected) this._attachConnectionListeners();
     this._syncOutputState();
+    this._reconcileBrowserSession();
     this._syncDisplayClock();
     if (!this._library && !this._loading) {
       this._loadLibrary();
@@ -751,6 +846,7 @@ class PodcastPlayerCard extends HTMLElement {
         selectedEpisode = await this._loadEpisodeById(player.current_episode_id);
       }
       this._currentEpisode = selectedEpisode || (!this._isSpeakerOutput() ? this._shared.currentEpisode : null) || this._library.episodes[0] || null;
+      this._reconcileBrowserSession();
       this._syncToShared();
       this._claimBrowserAudioSession();
       if ((!this._audio.paused && !this._audio.ended) || (this._isSpeakerOutput() && !this._isLimitedSpeakerOutput())) this._startProgressTimer();
@@ -817,6 +913,7 @@ class PodcastPlayerCard extends HTMLElement {
       current_feed_id: "current_feed_id",
       position: "position",
       position_updated_at: "position_updated_at",
+      browser_session_id: "browser_session_id",
       duration: "duration",
       playback_speed: "speed",
       browser_player_state: "state",
@@ -1190,7 +1287,7 @@ class PodcastPlayerCard extends HTMLElement {
     const target = this._selectedSpeakerTarget();
     if (target && !this._targetCanPlay(target)) return this._targetStatus(target).label;
     if (this._isSpeakerOutput() && !this._targetCanPause(target)) return "Restart";
-    if (this._browserSessionNeedsTakeover()) return this._audio && this._audio.src ? "Resume" : "Take over";
+    if (this._browserSessionNeedsTakeover()) return this._ownsBackendBrowserSession() && this._audio && this._audio.src ? "Resume" : "Take over";
     return playing ? "Pause" : "Play";
   }
 
@@ -1271,7 +1368,7 @@ class PodcastPlayerCard extends HTMLElement {
     const ep = this._currentEpisode || {};
     const player = this._playerState();
     const backendIsCurrent = Boolean(ep.episode_id && player.current_episode_id === ep.episode_id);
-    const useLocalTiming = this._hasBrowserAudioSession() && Boolean(this._shared.ownerId);
+    const useLocalTiming = this._hasBrowserAudioSession() && Boolean(this._shared.sessionId) && Boolean(this._shared.ownerId);
     let position = Number(
       (useLocalTiming && this._audio.currentTime) ||
       (backendIsCurrent && player.position) ||
@@ -1323,11 +1420,11 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _ownsBrowserAudioSession() {
-    return this._hasBrowserAudioSession() && this._shared.ownerId === this._instanceId;
+    return this._hasBrowserAudioSession() && Boolean(this._shared.sessionId) && this._shared.ownerId === this._instanceId;
   }
 
   _claimBrowserAudioSession() {
-    if (this._isSpeakerOutput() || !this._hasBrowserAudioSession() || this._audio.paused || this._audio.ended) return false;
+    if (this._isSpeakerOutput() || !this._hasBrowserAudioSession() || !this._shared.sessionId || this._audio.paused || this._audio.ended) return false;
     if (!this._shared.ownerId) this._shared.ownerId = this._instanceId;
     return this._shared.ownerId === this._instanceId;
   }
@@ -1345,7 +1442,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   _playbackStatusText(playing = this._isActuallyPlaying()) {
     if (this._isBrowserAudioLoading()) return this._browserLoadState === "buffering" ? "buffering" : "loading";
-    if (this._browserSessionNeedsTakeover()) return "resume needed";
+    if (this._browserSessionNeedsTakeover()) return this._ownsBackendBrowserSession() ? "resume needed" : "on another device";
     if (this._isSpeakerOutput()) {
       const state = String(this._externalSession().transport_state || "").toLowerCase();
       if (state === "starting") return "starting";
@@ -1383,6 +1480,12 @@ class PodcastPlayerCard extends HTMLElement {
     this._setBrowserLoadState("idle");
     this._stopProgressTimer();
     this._stopDisplayClock();
+    const suppressSave = this._suppressNextPauseSave;
+    this._suppressNextPauseSave = false;
+    if (suppressSave) {
+      this._updateMediaSession(true);
+      return;
+    }
     if (!this._ownsBrowserAudioSession()) return;
     this._saveProgress(false);
     this._updateMediaSession(true);
@@ -1513,6 +1616,7 @@ class PodcastPlayerCard extends HTMLElement {
       this._currentEpisode.episode_id === ep.episode_id &&
       !this._isSpeakerOutput() &&
       this._hasBrowserAudioSession() &&
+      this._shared.sessionId &&
       this._shared.ownerId
     ) {
       values.push(this._audio.currentTime);
@@ -1526,9 +1630,10 @@ class PodcastPlayerCard extends HTMLElement {
     return 0;
   }
 
-  _seekBrowserToResumePosition(ep) {
+  _seekBrowserToResumePosition(ep, requestedPosition = null) {
     if (!ep || this._isSpeakerOutput()) return;
-    const position = Number(this._resumePositionForEpisode(ep) || 0);
+    const requested = Number(requestedPosition);
+    const position = Number(Number.isFinite(requested) && requestedPosition !== null ? requested : this._resumePositionForEpisode(ep)) || 0;
     if (!(position > 0)) return;
     const applySeek = () => {
       try {
@@ -1543,6 +1648,45 @@ class PodcastPlayerCard extends HTMLElement {
       applySeek();
     } else {
       this._audio.addEventListener("loadedmetadata", applySeek, { once: true });
+    }
+  }
+
+  _newBrowserSessionId(ep) {
+    const randomPart = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return `${ep.episode_id}:${randomPart}`;
+  }
+
+  async _claimBrowserSession(ep, position, duration = 0) {
+    const sessionId = this._newBrowserSessionId(ep);
+    this._pendingBrowserSessionId = sessionId;
+    this._shared.pendingSessionId = sessionId;
+    this._shared.sessionId = sessionId;
+    this._shared.ownerId = this._instanceId;
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "podcast_player/claim_browser_session",
+        episode_id: ep.episode_id,
+        session_id: sessionId,
+        position: Math.max(0, Number(position || 0)),
+        duration: Math.max(0, Number(duration || ep.duration_seconds || 0)),
+        speed: this._currentBrowserSpeed(ep),
+      });
+      if (!result || result.claimed !== true || result.session_id !== sessionId) {
+        throw new Error("Home Assistant did not confirm browser playback ownership");
+      }
+      if (this._playerState().browser_session_id === sessionId) {
+        this._pendingBrowserSessionId = null;
+        this._shared.pendingSessionId = null;
+      }
+      return sessionId;
+    } catch (err) {
+      if (this._pendingBrowserSessionId === sessionId) this._pendingBrowserSessionId = null;
+      if (this._shared.pendingSessionId === sessionId) this._shared.pendingSessionId = null;
+      if (this._shared.sessionId === sessionId) this._shared.sessionId = null;
+      if (this._shared.ownerId === this._instanceId) this._shared.ownerId = null;
+      throw err;
     }
   }
 
@@ -1565,17 +1709,22 @@ class PodcastPlayerCard extends HTMLElement {
       return;
     }
 
-    try {
-      await this._hass.callService("podcast_player", "play_episode", { episode_id: ep.episode_id });
-    } catch (err) {
-      this._error = this._errorText(err);
+    const desiredSrc = this._useProxyForCurrent ? ep.proxy_url : ep.audio_url;
+    if (!desiredSrc) {
+      this._error = "This episode has no playable audio URL.";
       this._render();
       return;
     }
 
-    const desiredSrc = this._useProxyForCurrent ? ep.proxy_url : ep.audio_url;
-    if (!desiredSrc) {
-      this._error = "This episode has no playable audio URL.";
+    const playerBeforeClaim = this._playerState();
+    const timingBeforeClaim = this._displayPositionDuration();
+    const resumePosition = playerBeforeClaim.current_episode_id === ep.episode_id
+      ? Number(timingBeforeClaim.position || 0)
+      : Number(this._resumePositionForEpisode(ep) || 0);
+    try {
+      await this._claimBrowserSession(ep, resumePosition, timingBeforeClaim.duration || ep.duration_seconds || 0);
+    } catch (err) {
+      this._error = this._errorText(err) || "Could not transfer browser playback to this device.";
       this._render();
       return;
     }
@@ -1588,12 +1737,10 @@ class PodcastPlayerCard extends HTMLElement {
     // Important for source switching: if the same episode URL is reused after
     // stopping an external player, the browser audio src may already match.
     // Still seek to the saved progress instead of starting from 0:00.
-    this._seekBrowserToResumePosition(ep);
+    this._seekBrowserToResumePosition(ep, resumePosition);
     this._setSharedBrowserSpeed(this._currentBrowserSpeed(ep), false, false);
     this._syncToShared();
     const attemptedProxy = this._useProxyForCurrent;
-    this._shared.sessionId = `${ep.episode_id}:${Date.now()}`;
-    this._shared.ownerId = this._instanceId;
     try {
       await this._audio.play();
       this._shared.lastSeenAt = Date.now();
@@ -1602,8 +1749,10 @@ class PodcastPlayerCard extends HTMLElement {
       this._lastRenderKey = "";
       this._render();
     } catch (err) {
-      if (this._shared.ownerId === this._instanceId) this._shared.ownerId = null;
       if (attemptedProxy) {
+        await this._saveProgress(false);
+        if (this._shared.ownerId === this._instanceId) this._shared.ownerId = null;
+        this._shared.sessionId = null;
         this._error = this._audioErrorText(this._errorText(err) || "Audio playback failed.");
         this._render();
         return;
@@ -1647,8 +1796,9 @@ class PodcastPlayerCard extends HTMLElement {
         );
       }
       try {
-        this._shared.sessionId = `${ep.episode_id}:${Date.now()}`;
-        this._shared.ownerId = this._instanceId;
+        if (!this._ownsBrowserAudioSession()) {
+          await this._claimBrowserSession(ep, position, ep.duration_seconds || 0);
+        }
         await this._audio.play();
         this._shared.lastSeenAt = Date.now();
         this._error = null;
@@ -1657,7 +1807,9 @@ class PodcastPlayerCard extends HTMLElement {
         this._startProgressTimer();
         return true;
       } catch (err) {
+        if (this._ownsBrowserAudioSession()) await this._saveProgress(false);
         if (this._shared.ownerId === this._instanceId) this._shared.ownerId = null;
+        this._shared.sessionId = null;
         this._error = this._audioErrorText(this._errorText(err) || "Audio proxy failed.");
         return false;
       } finally {
@@ -1692,8 +1844,13 @@ class PodcastPlayerCard extends HTMLElement {
     // episode had a saved progress point. The backend also checks stored
     // progress, so this is only a precise hint.
     let resumePosition = this._resumePositionForEpisode(ep);
+    const playerBeforeSwitch = this._playerState();
+    if (playerBeforeSwitch.current_episode_id === ep.episode_id) {
+      resumePosition = Number(this._displayPositionDuration().position || resumePosition || 0);
+    }
     if (!this._audio.paused) {
       resumePosition = Number(this._audio.currentTime || resumePosition || 0);
+      this._suppressNextPauseSave = true;
       this._audio.pause();
       await this._saveProgress(false);
     }
@@ -1753,8 +1910,8 @@ class PodcastPlayerCard extends HTMLElement {
     }
     if (!this._audio.paused && !this._audio.ended) {
       await this._withPendingAction("pause", "Pausing playback", async () => {
+        this._suppressNextPauseSave = true;
         this._audio.pause();
-        await this._hass.callService("podcast_player", "pause", {});
         await this._saveProgress(false);
         this._updateMediaSession(true);
         this._lastRenderKey = "";
@@ -1824,6 +1981,11 @@ class PodcastPlayerCard extends HTMLElement {
 
   async _jump(delta) {
     if (!this._currentEpisode) return;
+    if (!this._isSpeakerOutput() && this._browserSessionNeedsTakeover()) {
+      this._info = "Take over playback before seeking from this device.";
+      this._render();
+      return;
+    }
     const target = this._isSpeakerOutput() ? this._speakerTargetEntity() : null;
     if (target && !this._targetCanSeek(target)) {
       this._info = `${this._outputNameFor(target)} does not support seek.`;
@@ -1846,6 +2008,11 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _setSpeed(speed) {
+    if (!this._isSpeakerOutput() && this._browserSessionNeedsTakeover()) {
+      this._info = "Take over playback before changing speed from this device.";
+      this._render();
+      return;
+    }
     speed = this._setSharedBrowserSpeed(speed, true, true);
     this._syncToShared();
     if (this._currentEpisode) this._currentEpisode.playback_speed = speed;
@@ -1886,7 +2053,7 @@ class PodcastPlayerCard extends HTMLElement {
   _shouldRunDisplayClock() {
     if (!this._connected || this._pageHidden || !this._currentEpisode) return false;
     if (this._isSpeakerOutput()) return this._isActuallyPlaying();
-    const useLocalTiming = this._hasBrowserAudioSession() && Boolean(this._shared.ownerId);
+    const useLocalTiming = this._hasBrowserAudioSession() && Boolean(this._shared.sessionId) && Boolean(this._shared.ownerId);
     if (useLocalTiming) return false;
     const player = this._playerState();
     return player.current_episode_id === this._currentEpisode.episode_id &&
@@ -2001,18 +2168,26 @@ class PodcastPlayerCard extends HTMLElement {
       playing: Boolean(isCurrent ? this._isActuallyPlaying() : playing),
       speed: this._currentBrowserSpeed(episode),
     };
+    if (!this._isSpeakerOutput() && this._shared.sessionId) request.session_id = this._shared.sessionId;
     if (duration) request.duration = duration;
     const attempt = { id: ++this._progressSaveSequence };
     let timeoutId = null;
     try {
       const requestPromise = connection.sendMessagePromise(request);
       this._progressSaveInFlight = attempt;
-      await Promise.race([
+      const result = await Promise.race([
         requestPromise,
         new Promise((_, reject) => {
           timeoutId = window.setTimeout(() => reject(new Error("Podcast progress sync timed out")), 5000);
         }),
       ]);
+      if (result && result.saved === false) {
+        if (result.reason === "not_active_browser_session") {
+          this._relinquishLocalBrowserPlayback();
+        }
+        this._progressDirty = true;
+        return false;
+      }
       this._progressDirty = false;
       return true;
     } catch (err) {
@@ -2570,6 +2745,7 @@ class PodcastPlayerCard extends HTMLElement {
       ? `Playing on ${this._speakerTargetName()}`
       : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : "Browser");
     const actionPending = this._hasBlockingAction();
+    const browserControlsLocked = !externalSelected && this._browserSessionNeedsTakeover();
     const playDisabled = !ep || actionPending || (externalSelected && !targetStatus.playable);
     const playbackStatus = this._playbackStatusText(playing);
     this.shadowRoot.innerHTML = `
@@ -2593,9 +2769,9 @@ class PodcastPlayerCard extends HTMLElement {
               ${this._renderPlaybackStatusPanel()}
               <div class="compact-controls">
                 ${this._renderOutputSelect()}
-                ${canSpeed ? `<label class="speed-control compact-speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${ep && !actionPending ? "" : "disabled"}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
+                ${canSpeed ? `<label class="speed-control compact-speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${ep && !actionPending && !browserControlsLocked ? "" : "disabled"}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
                 <button class="icon" id="playpause" ${playDisabled ? "disabled" : ""}>${e(playLabel)}</button>
-                ${canSeek ? `<button class="secondary icon" id="back" ${ep && !actionPending ? "" : "disabled"}>-15s</button><button class="secondary icon" id="forward" ${ep && !actionPending ? "" : "disabled"}>+30s</button>` : ""}
+                ${canSeek ? `<button class="secondary icon" id="back" ${ep && !actionPending && !browserControlsLocked ? "" : "disabled"}>-15s</button><button class="secondary icon" id="forward" ${ep && !actionPending && !browserControlsLocked ? "" : "disabled"}>+30s</button>` : ""}
                 ${this._isSpeakerOutput() || (externalSelected && targetStatus.playable) ? `<button class="secondary" id="stop" ${ep && !actionPending ? "" : "disabled"}>Stop</button>` : ""}
               </div>
               ${this._pendingMarkup()}
@@ -2699,6 +2875,7 @@ class PodcastPlayerCard extends HTMLElement {
       ? `Playing on ${this._speakerTargetName()}`
       : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : "Browser playback");
     const actionPending = this._hasBlockingAction();
+    const browserControlsLocked = !externalSelected && this._browserSessionNeedsTakeover();
     const playDisabled = actionPending || (externalSelected && !targetStatus.playable);
     const playbackStatus = this._playbackStatusText(playing);
     return `
@@ -2717,11 +2894,11 @@ class PodcastPlayerCard extends HTMLElement {
           ${this._renderPlaybackStatusPanel()}
           <div class="controls meta-controls">
             ${this._renderOutputSelect()}
-            ${canSpeed ? `<label class="speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${actionPending ? "disabled" : ""}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
+            ${canSpeed ? `<label class="speed-control" title="Playback speed"><span>Speed</span><select id="speed" aria-label="Playback speed" ${actionPending || browserControlsLocked ? "disabled" : ""}>${PodcastPlayerCard._speedOptions().map((s) => `<option value="${s}" ${Number(speed) === s ? "selected" : ""}>${s}x</option>`).join("")}</select></label>` : ""}
           </div>
           <div class="transport-controls">
             <button class="icon primary-action" id="playpause" ${playDisabled ? "disabled" : ""}>${e(playLabel)}</button>
-            ${canSeek ? `<button class="secondary icon" id="back" ${actionPending ? "disabled" : ""}>-15s</button><button class="secondary icon" id="forward" ${actionPending ? "disabled" : ""}>+30s</button>` : ""}
+            ${canSeek ? `<button class="secondary icon" id="back" ${actionPending || browserControlsLocked ? "disabled" : ""}>-15s</button><button class="secondary icon" id="forward" ${actionPending || browserControlsLocked ? "disabled" : ""}>+30s</button>` : ""}
             ${this._isSpeakerOutput() || (externalSelected && targetStatus.playable) ? `<button class="secondary" id="stop" ${actionPending ? "disabled" : ""}>Stop</button>` : ""}
             <button class="secondary mark-action" id="mark-played" ${actionPending ? "disabled" : ""}>${ep.played ? "Mark unplayed" : "Mark played"}</button>
           </div>
