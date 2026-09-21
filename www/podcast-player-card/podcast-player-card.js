@@ -941,9 +941,6 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _playbackStatusItems() {
-    const mediaSessionSupported = PodcastPlayerCard._mediaSessionSupported();
-    const mediaSessionEnabled = this._mediaSessionEnabled();
-    const androidWebView = PodcastPlayerCard._isAndroidWebView();
     const selectedTarget = this._selectedSpeakerTarget();
     const speakerState = this._selectedSpeakerState();
     const speakerStateName = speakerState && speakerState.state ? String(speakerState.state) : "";
@@ -978,26 +975,6 @@ class PodcastPlayerCard extends HTMLElement {
     }
 
     return [
-      {
-        label: "Browser controls",
-        value: mediaSessionEnabled ? "System + card" : "Card only",
-        state: "ok",
-        title: mediaSessionEnabled
-          ? "This browser supports system media metadata and transport actions."
-          : mediaSessionSupported
-            ? "System media controls are disabled; use the podcast card controls."
-            : "This browser does not expose the Media Session API; use the podcast card controls.",
-      },
-      {
-        label: "Mobile app",
-        value: androidWebView ? (mediaSessionEnabled ? "System controls" : "Haptic-safe") : "Normal",
-        state: androidWebView && mediaSessionEnabled ? "warn" : "ok",
-        title: androidWebView
-          ? mediaSessionEnabled
-            ? "Android system media controls were explicitly enabled and may update the Companion notification."
-            : "Android system media controls are disabled to prevent repeated Companion notification haptics."
-          : "No Android WebView media-control limitation detected.",
-      },
       {
         label: "Output",
         value: outputState === "Ready" || outputState === "Active" ? output : `${output}: ${outputState}`,
