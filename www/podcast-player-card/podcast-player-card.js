@@ -27,6 +27,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._connected = false;
     this._progressTimer = null;
     this._progressSaveInFlight = null;
+    this._progressSaveSequence = 0;
     this._progressDirty = false;
     this._renderTimer = null;
     this._lastDynamicUpdate = 0;
@@ -48,6 +49,9 @@ class PodcastPlayerCard extends HTMLElement {
     this._boundPageHideHandler = () => this._onPageHidden();
     this._boundPageShowHandler = () => this._onPageShown();
     this._boundWindowFocusHandler = () => this._onPageShown();
+    this._boundConnectionReadyHandler = () => this._onConnectionReady();
+    this._boundConnectionDisconnectedHandler = () => this._onConnectionDisconnected();
+    this._listenedConnection = null;
     this._boundAudioHandlers = {
       loadstart: () => this._onAudioLoading("loading"),
       waiting: () => this._onAudioLoading("buffering"),
@@ -290,6 +294,26 @@ class PodcastPlayerCard extends HTMLElement {
     this._pageLifecycleListenersAttached = true;
   }
 
+  _attachConnectionListeners() {
+    const connection = this._hass && this._hass.connection;
+    if (!connection || this._listenedConnection === connection || typeof connection.addEventListener !== "function") return;
+    this._detachConnectionListeners();
+    connection.addEventListener("ready", this._boundConnectionReadyHandler);
+    connection.addEventListener("disconnected", this._boundConnectionDisconnectedHandler);
+    this._listenedConnection = connection;
+  }
+
+  _detachConnectionListeners() {
+    const connection = this._listenedConnection;
+    if (!connection || typeof connection.removeEventListener !== "function") {
+      this._listenedConnection = null;
+      return;
+    }
+    connection.removeEventListener("ready", this._boundConnectionReadyHandler);
+    connection.removeEventListener("disconnected", this._boundConnectionDisconnectedHandler);
+    this._listenedConnection = null;
+  }
+
   _detachPageLifecycleListeners() {
     if (!this._pageLifecycleListenersAttached) return;
     document.removeEventListener("visibilitychange", this._boundVisibilityHandler);
@@ -310,6 +334,7 @@ class PodcastPlayerCard extends HTMLElement {
   _onPageHidden() {
     if (this._shared) this._shared.lastSeenAt = Date.now();
     this._stopProgressTimer();
+    this._abandonProgressSave();
     this._syncToShared();
     this._updateMediaSession(true);
     // Make one best-effort, silent checkpoint while the websocket is still
@@ -319,6 +344,8 @@ class PodcastPlayerCard extends HTMLElement {
 
   _onPageShown() {
     if (!this._connected) return;
+    this._abandonProgressSave();
+    this._attachConnectionListeners();
     this._syncFromShared();
     this._syncOutputState();
     if (!this._isSpeakerOutput() && this._audio && !this._audio.paused && !this._audio.ended) {
@@ -332,6 +359,21 @@ class PodcastPlayerCard extends HTMLElement {
     this._updateMediaSession(true);
     this._lastRenderKey = "";
     this._scheduleRender();
+  }
+
+  _onConnectionDisconnected() {
+    this._progressDirty = true;
+    this._abandonProgressSave();
+    this._stopProgressTimer();
+  }
+
+  _onConnectionReady() {
+    if (!this._connected || document.visibilityState === "hidden") return;
+    this._abandonProgressSave();
+    if (this._isActuallyPlaying()) this._startProgressTimer();
+    if (this._currentEpisode && (this._progressDirty || this._isActuallyPlaying())) {
+      this._saveProgress(this._isActuallyPlaying());
+    }
   }
 
   _browserSessionNeedsTakeover() {
@@ -569,6 +611,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    if (this._connected) this._attachConnectionListeners();
     this._syncOutputState();
     if (!this._library && !this._loading) {
       this._loadLibrary();
@@ -581,6 +624,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._connected = true;
     this._attachAudioListeners();
     this._attachPageLifecycleListeners();
+    this._attachConnectionListeners();
     window.addEventListener("podcast-player-speed-changed", this._boundSharedSpeedHandler);
     window.addEventListener("podcast-player-output-target-changed", this._boundSharedOutputHandler);
     window.addEventListener("storage", this._boundStorageHandler);
@@ -600,6 +644,8 @@ class PodcastPlayerCard extends HTMLElement {
     window.removeEventListener("storage", this._boundStorageHandler);
     this._detachAudioListeners();
     this._detachPageLifecycleListeners();
+    this._detachConnectionListeners();
+    this._abandonProgressSave();
     this._stopProgressTimer();
     this._clearMediaSession();
   }
@@ -1751,6 +1797,10 @@ class PodcastPlayerCard extends HTMLElement {
     this._progressTimer = null;
   }
 
+  _abandonProgressSave() {
+    this._progressSaveInFlight = null;
+  }
+
   _onTimeUpdate() {
     this._setBrowserLoadState("idle");
     if (this._currentEpisode) {
@@ -1830,9 +1880,17 @@ class PodcastPlayerCard extends HTMLElement {
       speed: this._currentBrowserSpeed(episode),
     };
     if (duration) request.duration = duration;
+    const attempt = { id: ++this._progressSaveSequence };
+    let timeoutId = null;
     try {
-      this._progressSaveInFlight = connection.sendMessagePromise(request);
-      await this._progressSaveInFlight;
+      const requestPromise = connection.sendMessagePromise(request);
+      this._progressSaveInFlight = attempt;
+      await Promise.race([
+        requestPromise,
+        new Promise((_, reject) => {
+          timeoutId = window.setTimeout(() => reject(new Error("Podcast progress sync timed out")), 5000);
+        }),
+      ]);
       this._progressDirty = false;
       return true;
     } catch (err) {
@@ -1842,7 +1900,8 @@ class PodcastPlayerCard extends HTMLElement {
       console.debug("Podcast progress sync deferred", err);
       return false;
     } finally {
-      this._progressSaveInFlight = null;
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (this._progressSaveInFlight === attempt) this._progressSaveInFlight = null;
     }
   }
 

@@ -28,5 +28,8 @@ jobs:
       - name: Compile Python
         run: python -m compileall custom_components/podcast_player
 
+      - name: Card lifecycle tests
+        run: node --test tests/*.test.js
+
       - name: Tests
         run: pytest
