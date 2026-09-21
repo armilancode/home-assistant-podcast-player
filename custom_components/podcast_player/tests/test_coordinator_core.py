@@ -611,7 +611,8 @@ async def test_browser_playback_actions_and_progress_events() -> None:
     assert player["position"] == 32
 
     await coord.async_pause()
-    assert player["browser_session_id"] == "session-browser-123"
+    assert player["browser_session_id"] is None
+    assert player["browser_session_client"] is None
     await coord.async_stop()
     assert player["browser_session_id"] is None
     assert player["browser_session_client"] is None
@@ -628,6 +629,30 @@ async def test_browser_playback_actions_and_progress_events() -> None:
     assert coord.storage.data["progress"]["ep_1"]["playback_speed"] == 1.5
     assert coord.storage.async_save.await_count >= 7
     assert coord.updates
+
+
+@pytest.mark.asyncio
+async def test_paused_browser_progress_releases_session_ownership() -> None:
+    """A paused browser checkpoint must not leave a ghost device owner."""
+    coord = _coordinator()
+    coord.storage.data["episodes"]["ep_1"] = {
+        "episode_id": "ep_1",
+        "feed_id": "feed_1",
+        "title": "Episode One",
+    }
+    player = coord.storage.data["player"]
+    player["output_mode"] = "browser"
+    player["browser_session_id"] = "session-browser-123"
+    player["browser_session_client"] = "home_assistant_app"
+    player["browser_session_updated_at"] = "2026-09-21T12:00:00+00:00"
+
+    await coord.async_save_progress("ep_1", 42, duration=100, playing=False)
+
+    assert player["state"] == "paused"
+    assert player["position"] == 42
+    assert player["browser_session_id"] is None
+    assert player["browser_session_client"] is None
+    assert player["browser_session_updated_at"] is None
 
 
 @pytest.mark.asyncio

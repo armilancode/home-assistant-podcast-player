@@ -771,6 +771,12 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if player.get("output_mode") == "speaker":
             self._external_session()["transport_state"] = "paused"
             self._external_session()["updated_at"] = utcnow_iso()
+        else:
+            # A browser session is a lease for the device that is actively
+            # producing audio, not persistent ownership of a paused episode.
+            # Releasing it here also lets the HA media-player pause action stop
+            # the connected browser through the session state observer.
+            self._clear_browser_session(player)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
         self.hass.bus.async_fire(EVENT_PLAYBACK_PAUSED, {"episode_id": episode_id})
@@ -859,6 +865,13 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         before = self.storage.get_progress(episode_id).get("played", False)
         progress = self.storage.save_progress(episode_id, position, duration, playing, speed)
+        if playing is False:
+            # Once browser audio is paused there is no active output device to
+            # own. Keeping its session id would strand ownership after a tab or
+            # Companion WebView is restarted.
+            player = self.storage.data["player"]
+            if player.get("output_mode") == "browser":
+                self._clear_browser_session(player)
         after = progress.get("played", False)
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())

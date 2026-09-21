@@ -339,3 +339,46 @@ test("a passive browser identifies playback in the Home Assistant app", () => {
   assert.equal(session.label, "Session");
   assert.equal(session.value, "Active elsewhere");
 });
+
+test("paused playback has no device owner or takeover state", () => {
+  const card = progressCard();
+  card._shared.sessionId = null;
+  card._shared.ownerId = null;
+  card._audio.src = "";
+  card._playerState = () => ({
+    current_episode_id: "ep_test",
+    state: "paused",
+    output_mode: "browser",
+    browser_session_id: null,
+    browser_session_client: null,
+  });
+
+  const [output, session] = card._playbackStatusItems();
+
+  assert.equal(output.value, "Browser");
+  assert.equal(session.value, "Paused");
+  assert.equal(card._browserSessionNeedsTakeover(), false);
+  assert.equal(card._playPauseLabelForSelected(false), "Play");
+});
+
+test("lock-screen play reacquires ownership after a paused session", () => {
+  const card = progressCard();
+  let toggles = 0;
+  let directPlays = 0;
+  const handlers = {};
+  card._setMediaSessionAction = (action, handler) => { handlers[action] = handler; };
+  card._shared.sessionId = null;
+  card._shared.ownerId = null;
+  card._audio.paused = true;
+  card._audio.play = () => {
+    directPlays += 1;
+    return Promise.resolve();
+  };
+  card._togglePlay = () => { toggles += 1; };
+
+  card._installMediaSessionActionHandlers();
+  handlers.play();
+
+  assert.equal(toggles, 1);
+  assert.equal(directPlays, 0);
+});

@@ -542,17 +542,21 @@ class PodcastPlayerCard extends HTMLElement {
 
   _installMediaSessionActionHandlers() {
     this._setMediaSessionAction("play", () => {
-      if (this._audio && this._audio.src && this._audio.paused) {
+      if (this._ownsBackendBrowserSession() && this._audio && this._audio.src && this._audio.paused) {
         this._audio.play().catch((err) => {
           this._error = this._audioErrorText(this._errorText(err) || "Audio playback failed.");
           this._render();
         });
         return;
       }
+      // A paused browser session has no owner. Route lock-screen resumes
+      // through the normal play path so this client first acquires a fresh
+      // server-authoritative lease instead of reviving an old local stream.
       this._togglePlay();
     });
     this._setMediaSessionAction("pause", () => {
       if (this._audio && !this._audio.paused) {
+        this._suppressNextPauseSave = true;
         this._audio.pause();
         this._saveProgress(false);
       }

@@ -172,6 +172,39 @@ def test_async_load_merges_existing_external_session_and_skips_unneeded_save() -
     assert partial._store.saved is partial.data
 
 
+def test_async_load_releases_legacy_paused_browser_session() -> None:
+    """Paused data from older releases must not retain a dead frontend lease."""
+    class PausedSessionStore:
+        def __init__(self) -> None:
+            self.saved = None
+
+        async def async_load(self) -> dict:
+            data = default_data()
+            data["player"].update(
+                {
+                    "state": "paused",
+                    "browser_session_id": "session-old-browser-123",
+                    "browser_session_client": "home_assistant_app",
+                    "browser_session_updated_at": "2026-09-21T12:00:00+00:00",
+                }
+            )
+            return data
+
+        async def async_save(self, data: dict) -> None:
+            self.saved = data
+
+    storage = PodcastStorage.__new__(PodcastStorage)
+    storage._store = PausedSessionStore()
+
+    asyncio.run(storage.async_load())
+
+    player = storage.data["player"]
+    assert player["browser_session_id"] is None
+    assert player["browser_session_client"] is None
+    assert player["browser_session_updated_at"] is None
+    assert storage._store.saved is storage.data
+
+
 def test_make_episode_id_uses_stable_fallbacks() -> None:
     """Episode IDs are stable across guid, audio, and fallback identity paths."""
     assert make_episode_id("feed", "guid", None, None, None).startswith("ep_")

@@ -187,6 +187,16 @@ class PodcastStorage:
         merged["schema_version"] = STORAGE_VERSION
         if stored.get("schema_version") != STORAGE_VERSION:
             needs_save = True
+
+        # Browser session ids represent an active audio-producing frontend.
+        # Older versions retained the id while paused, which leaves a ghost
+        # owner after the browser or Companion app is restarted.
+        player = merged["player"]
+        if player.get("state") != "playing" and player.get("browser_session_id"):
+            player["browser_session_id"] = None
+            player["browser_session_client"] = None
+            player["browser_session_updated_at"] = None
+            needs_save = True
         self.data = merged
         if needs_save:
             await self.async_save()
