@@ -41,7 +41,6 @@ from custom_components.podcast_player.sensor import (
 )
 
 INTEGRATION_PATH = Path(__file__).parents[1]
-REPOSITORY_PATH = INTEGRATION_PATH.parents[1]
 
 TRANSLATED_ENTITIES = {
     "binary_sensor": {
@@ -97,7 +96,7 @@ CUSTOM_ICON_KEYS = {
 def test_manifest_version_matches_runtime_version() -> None:
     """Release metadata must not drift between the backend and card."""
     manifest = json.loads((INTEGRATION_PATH / "manifest.json").read_text())
-    card_source = (REPOSITORY_PATH / "www" / "podcast-player-card" / "podcast-player-card.js").read_text()
+    card_source = (INTEGRATION_PATH / "frontend" / "podcast-player-card.js").read_text()
 
     assert manifest["version"] == VERSION
     assert card_source.startswith(f"// Podcast Player Card v{VERSION}\n")

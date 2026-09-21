@@ -18,7 +18,7 @@ Run the same checks required by continuous integration before publishing:
 ```text
 ruff check .
 python -m compileall custom_components/podcast_player
-node --check www/podcast-player-card/podcast-player-card.js
+node --check custom_components/podcast_player/frontend/podcast-player-card.js
 node --test tests/*.test.js
 pytest
 ```
@@ -30,4 +30,4 @@ For a release, also validate the Home Assistant configuration with the candidate
 3. Pause and confirm both clients show **Play**, not **Take over**.
 4. Resume from the other client and confirm the shared position is retained.
 
-The version in `custom_components/podcast_player/const.py`, `manifest.json`, the changelog heading, release tag, dashboard resource cache query, and card release asset must describe the same release.
+The version in `custom_components/podcast_player/const.py`, `manifest.json`, the bundled card header, changelog heading, and release tag must describe the same release.

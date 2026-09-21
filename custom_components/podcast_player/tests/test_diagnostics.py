@@ -15,6 +15,7 @@ from custom_components.podcast_player.const import (
 from custom_components.podcast_player.diagnostics import (
     async_get_config_entry_diagnostics,
 )
+from custom_components.podcast_player.frontend import FRONTEND_STATUS_KEY
 from custom_components.podcast_player.storage import PodcastStorage, default_data
 
 
@@ -80,6 +81,13 @@ async def test_config_entry_diagnostics_redacts_private_data(hass) -> None:
             last_exception=RuntimeError("Private refresh error"),
         ),
     )
+    hass.data[FRONTEND_STATUS_KEY] = {
+        "available": True,
+        "version": "0.3.0-alpha.3",
+        "module_url": "/podcast_player/podcast-player-card.js?v=0.3.0-alpha.3",
+        "legacy_resources_removed": 1,
+        "legacy_yaml_resource_present": False,
+    }
 
     result = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -99,6 +107,7 @@ async def test_config_entry_diagnostics_redacts_private_data(hass) -> None:
         "last_update_success": False,
         "has_update_error": True,
     }
+    assert result["frontend"] == hass.data[FRONTEND_STATUS_KEY]
     assert result["playback"]["has_current_episode"] is True
     assert result["playback"]["has_output_target"] is True
     assert result["playback"]["has_playback_error"] is True

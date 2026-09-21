@@ -20,6 +20,7 @@ from .const import (
     HTTP_SPEAKER_PROXY_URL,
     PLAYER_ENTITY_ID,
     USER_AGENT,
+    VERSION,
 )
 from .coordinator import PodcastRuntime
 from .media_source import media_source_id_for_episode
@@ -325,6 +326,7 @@ async def websocket_get_library(hass: HomeAssistant, connection: websocket_api.A
     connection.send_result(
         msg["id"],
         {
+            "integration_version": VERSION,
             "feeds": feeds,
             "episodes": public_episodes,
             "player": storage.data["player"],

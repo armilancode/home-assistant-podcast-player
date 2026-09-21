@@ -20,6 +20,7 @@ async def test_setup_entry_initializes_runtime_and_forwards_platforms(hass, enab
         patch("custom_components.podcast_player.PodcastStorage.async_load", AsyncMock()),
         patch("custom_components.podcast_player.PodcastStorage.async_save", AsyncMock()) as save_storage,
         patch("custom_components.podcast_player.async_register_api"),
+        patch("custom_components.podcast_player.async_setup_card_frontend", AsyncMock()) as setup_card,
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)) as forward_setups,
     ):
         result = await async_setup_entry(hass, entry)
@@ -30,6 +31,28 @@ async def test_setup_entry_initializes_runtime_and_forwards_platforms(hass, enab
     assert entry.runtime_data.storage.data["settings"]["speaker_proxy_secret"]
     save_storage.assert_awaited_once()
     forward_setups.assert_awaited_once_with(entry, PLATFORMS)
+    setup_card.assert_awaited_once_with(hass)
+
+
+async def test_setup_entry_keeps_backend_when_card_registration_fails(hass, enable_custom_integrations) -> None:
+    """A frontend-only failure must not take down entities and services."""
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.podcast_player.PodcastStorage.async_load", AsyncMock()),
+        patch("custom_components.podcast_player.PodcastStorage.async_save", AsyncMock()),
+        patch("custom_components.podcast_player.async_register_api"),
+        patch(
+            "custom_components.podcast_player.async_setup_card_frontend",
+            AsyncMock(side_effect=RuntimeError("frontend unavailable")),
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+    ):
+        result = await async_setup_entry(hass, entry)
+
+    assert result is True
+    assert entry.entry_id in hass.data[DOMAIN]
 
 
 async def test_setup_entry_imports_initial_feed_once(hass, enable_custom_integrations) -> None:

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0-alpha.3 — 2026-09-21
+
+### Added
+
+- Bundled the companion dashboard card inside the integration so HACS installs and updates the backend and card together.
+- Registered the bundled card through Home Assistant's supported frontend module API at a versioned static URL.
+- Added a visible backend/card version-mismatch warning with recovery instructions.
+- Added privacy-safe frontend registration and migration details to Home Assistant diagnostics.
+
+### Changed
+
+- Fresh installations no longer require copying JavaScript into `www` or creating a Lovelace resource.
+- Storage-mode upgrades remove only exact legacy Podcast Player card resources after the bundled module is active.
+- YAML-managed Lovelace resources remain untouched and produce a targeted migration reminder.
+
 ## 0.3.0-alpha.2 — 2026-09-21
 
 ### Fixed

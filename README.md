@@ -91,23 +91,25 @@ The options form includes the setup parameters above and adds:
 
 The backend integration works without the companion card. The card adds a richer dashboard experience for browsing, browser playback, and progress updates.
 
-To install the card manually:
+The card is bundled with the integration and registered through Home Assistant's frontend module API. HACS and manual integration updates therefore install the backend and matching card together. Do not copy a JavaScript file into `www`, and do not add a dashboard resource.
 
-1. Download `podcast-player-card.js` from the matching entry on the [GitHub Releases page](https://github.com/armilancode/home-assistant-podcast-player/releases). The card is included as a release asset because HACS installs the backend integration but does not copy this repository's `www` directory.
-2. Copy the downloaded file to `www/podcast-player-card/podcast-player-card.js` in your Home Assistant configuration directory.
-3. Add this dashboard resource:
+After installing or updating Podcast Player:
 
-   ```text
-   /local/podcast-player-card/podcast-player-card.js?v=0.3.0-alpha.2
-   ```
-
-   The version query prevents Home Assistant and the browser from retaining an older card after an update. Change it to the newly installed version whenever you update the card.
-
-4. Add a manual dashboard card using:
+1. Restart Home Assistant.
+2. Reload the dashboard once on each browser or Companion app.
+3. Add a manual dashboard card using:
 
    ```yaml
    type: custom:podcast-player-card
    ```
+
+If the browser still has an older card cached, the card displays both version numbers and asks for a restart and dashboard reload.
+
+### Migration from 0.3.0-alpha.2 and older
+
+When Lovelace resources are managed through the UI, Podcast Player removes its exact legacy `/local/podcast-player-card/...` resource after the bundled module is active. Other resources and dashboards are not changed.
+
+YAML-managed Lovelace resources are never edited automatically. Remove the old Podcast Player card resource from YAML after upgrading; Home Assistant logs a specific reminder when it detects one.
 
 The card uses its own play, pause, seek, and speed controls. System media
 controls are enabled by default in regular browsers. They are disabled by
@@ -321,7 +323,11 @@ data:
 
 ### Every browser shows Paused elsewhere after an update
 
-Version `0.3.0-alpha.2` and newer release browser ownership whenever playback is paused and repair older paused sessions during startup. Confirm that the backend and card use the same release, restart Home Assistant, update the dashboard resource version query, and reload each client once.
+Version `0.3.0-alpha.2` and newer release browser ownership whenever playback is paused and repair older paused sessions during startup. Restart Home Assistant and reload each client once after updating.
+
+### The card reports a version mismatch
+
+The browser is running a different card version from the backend integration. Restart Home Assistant, then reload the dashboard. With `0.3.0-alpha.3` and newer, HACS installs both pieces together and no manual dashboard resource is required.
 
 ### Feed targets and output media players are mixed up
 
@@ -349,7 +355,7 @@ After removal:
 - Stored feed, episode, and progress data is no longer used by the integration.
 - If you installed through HACS, remove Podcast Player from HACS if you also want to remove the custom integration files.
 - If you installed manually, remove `custom_components/podcast_player` from your Home Assistant configuration.
-- If you installed the companion card manually, remove `www/podcast-player-card/podcast-player-card.js` and delete the dashboard resource.
+- If you upgraded from `0.3.0-alpha.2` or older and still have a manually copied `www/podcast-player-card` directory, it can be removed after the bundled card is working.
 
 ## Development
 

@@ -440,6 +440,7 @@ async def test_websocket_get_library_filters_active_library() -> None:
     assert connection.errors == []
     msg_id, result = connection.results[0]
     assert msg_id == 1
+    assert result["integration_version"] == "0.3.0-alpha.3"
     assert [episode["episode_id"] for episode in result["episodes"]] == ["ep_progress"]
     assert {feed["feed_id"] for feed in result["feeds"]} == {"feed_1", "feed_3"}
     assert result["feeds"][0]["counts"] == {"episodes": 3, "unplayed": 2, "in_progress": 1}

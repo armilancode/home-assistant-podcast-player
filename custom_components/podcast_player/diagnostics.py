@@ -14,6 +14,7 @@ from .const import (
     CONF_REMOVE_FEED_ID,
 )
 from .coordinator import PodcastRuntime
+from .frontend import FRONTEND_STATUS_KEY
 
 TO_REDACT = {
     CONF_INITIAL_RSS_URL,
@@ -44,6 +45,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "last_update_success": runtime.coordinator.last_update_success,
             "has_update_error": runtime.coordinator.last_exception is not None,
         },
+        "frontend": dict(hass.data.get(FRONTEND_STATUS_KEY, {"available": False})),
         "playback": {
             "state": player.get("state"),
             "output_mode": player.get("output_mode"),

@@ -50,7 +50,7 @@ global.window.removeEventListener = () => {};
 global.window.customCards = [];
 global.customElements = { get() { return undefined; }, define() {} };
 
-const cardPath = path.join(__dirname, "..", "www", "podcast-player-card", "podcast-player-card.js");
+const cardPath = path.join(__dirname, "..", "custom_components", "podcast_player", "frontend", "podcast-player-card.js");
 const source = `${fs.readFileSync(cardPath, "utf8")}\n;globalThis.__PodcastPlayerCard = PodcastPlayerCard;`;
 vm.runInThisContext(source, { filename: cardPath });
 const PodcastPlayerCard = global.__PodcastPlayerCard;
@@ -381,4 +381,14 @@ test("lock-screen play reacquires ownership after a paused session", () => {
 
   assert.equal(toggles, 1);
   assert.equal(directPlays, 0);
+});
+
+test("card warns when its bundled version does not match the integration", () => {
+  const card = progressCard();
+
+  card._backendVersion = "0.3.0-alpha.2";
+  assert.match(card._versionNoticeMarkup(), /card 0\.3\.0-alpha\.3 does not match integration 0\.3\.0-alpha\.2/);
+
+  card._backendVersion = "0.3.0-alpha.3";
+  assert.equal(card._versionNoticeMarkup(), "");
 });

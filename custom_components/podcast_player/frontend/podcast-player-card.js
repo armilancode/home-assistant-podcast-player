@@ -1,4 +1,5 @@
-// Podcast Player Card v0.3.0-alpha.2
+// Podcast Player Card v0.3.0-alpha.3
+const PODCAST_PLAYER_CARD_VERSION = "0.3.0-alpha.3";
 class PodcastPlayerCard extends HTMLElement {
   constructor() {
     super();
@@ -8,6 +9,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._rememberState = true;
     this._hass = null;
     this._library = null;
+    this._backendVersion = null;
     this._selectedFeed = "all";
     this._filter = "all";
     this._preferredOutputTarget = "browser";
@@ -534,6 +536,12 @@ class PodcastPlayerCard extends HTMLElement {
     return message ? `<div class="notice info">${this._escape(message)}</div>` : "";
   }
 
+  _versionNoticeMarkup() {
+    if (!this._backendVersion || this._backendVersion === PODCAST_PLAYER_CARD_VERSION) return "";
+    const message = `Podcast Player update incomplete: card ${PODCAST_PLAYER_CARD_VERSION} does not match integration ${this._backendVersion}. Restart Home Assistant, then reload this dashboard.`;
+    return `<div class="notice warn">${this._escape(message)}</div>`;
+  }
+
   _setMediaSessionAction(action, handler) {
     if (!this._mediaSessionEnabled()) return;
     try {
@@ -836,6 +844,7 @@ class PodcastPlayerCard extends HTMLElement {
         filter: this._filter,
         limit: this._config.limit || 200,
       });
+      this._backendVersion = this._library.integration_version || null;
       const activeFeedIds = new Set((this._library.feeds || []).map((feed) => feed.feed_id));
       if (this._selectedFeed !== "all" && !activeFeedIds.has(this._selectedFeed)) {
         this._selectedFeed = "all";
@@ -846,6 +855,7 @@ class PodcastPlayerCard extends HTMLElement {
           filter: this._filter,
           limit: this._config.limit || 200,
         });
+        this._backendVersion = this._library.integration_version || null;
       }
       this._syncOutputState();
       this._syncFromShared();
@@ -2500,6 +2510,8 @@ class PodcastPlayerCard extends HTMLElement {
       browserAudioLoading: this._isBrowserAudioLoading(),
       browserSessionNeedsTakeover: this._browserSessionNeedsTakeover(),
       browserSessionClient: this._playerState().browser_session_client || "",
+      backendVersion: this._backendVersion || "",
+      cardVersion: PODCAST_PLAYER_CARD_VERSION,
       mediaSessionSupported: PodcastPlayerCard._mediaSessionSupported(),
       mediaSessionEnabled: this._mediaSessionEnabled(),
       androidWebView: PodcastPlayerCard._isAndroidWebView(),
@@ -2559,6 +2571,7 @@ class PodcastPlayerCard extends HTMLElement {
       button:disabled { opacity: .45; cursor: default; }
       .notice { border-radius: 10px; padding: 10px; margin-bottom: 12px; font-size: .9rem; }
       .error { background: color-mix(in srgb, var(--error-color) 16%, transparent); color: var(--error-color); }
+      .warn { background: color-mix(in srgb, var(--warning-color, #f6a623) 16%, transparent); color: var(--primary-text-color); }
       .info { background: color-mix(in srgb, var(--primary-color) 16%, transparent); color: var(--primary-text-color); }
       .pending-inline { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--secondary-text-color); font-size: .86rem; min-width: 0; }
       .spinner { width: 15px; height: 15px; border: 2px solid color-mix(in srgb, var(--primary-color) 30%, transparent); border-top-color: var(--primary-color); border-radius: 999px; animation: podcast-spin .8s linear infinite; flex: 0 0 auto; }
@@ -2722,6 +2735,7 @@ class PodcastPlayerCard extends HTMLElement {
           </div>
 
           ${this._error ? `<div class="notice error">${e(this._error)}</div>` : ""}
+          ${this._versionNoticeMarkup()}
           ${this._info ? `<div class="notice info">${e(this._info)}</div>` : ""}
           ${this._browserSessionNoticeMarkup()}
 
@@ -2791,6 +2805,7 @@ class PodcastPlayerCard extends HTMLElement {
             </div>
             <button class="secondary" id="refresh" ${this._loading || actionPending ? "disabled" : ""}>Refresh</button>
           </div>
+          ${this._versionNoticeMarkup()}
           ${this._browserSessionNoticeMarkup()}
           <div class="compact-main">
             <div class="art">${ep && this._artFor(ep) ? `<img src="${e(this._artFor(ep))}" alt="" />` : `<div class="fallback">🎙️</div>`}</div>
@@ -2855,6 +2870,7 @@ class PodcastPlayerCard extends HTMLElement {
             <button class="secondary" id="refresh" ${this._loading || actionPending ? "disabled" : ""}>Refresh</button>
           </div>
           ${this._error ? `<div class="notice error">${e(this._error)}</div>` : ""}
+          ${this._versionNoticeMarkup()}
           ${this._info ? `<div class="notice info">${e(this._info)}</div>` : ""}
           ${this._pendingMarkup()}
           ${feeds.length ? this._renderFeedStrip(feeds) : ""}

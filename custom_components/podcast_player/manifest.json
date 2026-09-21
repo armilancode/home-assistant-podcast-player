@@ -2,7 +2,9 @@
   "domain": "podcast_player",
   "name": "Podcast Player",
   "after_dependencies": [
+    "frontend",
     "http",
+    "lovelace",
     "media_source"
   ],
   "codeowners": [
@@ -17,5 +19,5 @@
     "aio-podcast==0.1.0"
   ],
   "single_config_entry": true,
-  "version": "0.3.0-alpha.2"
+  "version": "0.3.0-alpha.3"
 }

@@ -43,6 +43,7 @@ from .const import (
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
 from .exceptions import translated_error
 from .feed_parser import PodcastParseError
+from .frontend import async_setup_card_frontend, async_unload_card_frontend
 from .speaker_proxy import ensure_proxy_secret
 from .storage import PodcastStorage, make_feed_id, normalize_rss_url
 
@@ -155,6 +156,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    try:
+        await async_setup_card_frontend(hass)
+    except Exception:  # noqa: BLE001
+        # Frontend registration is optional for backend entities and external
+        # playback. Log it without taking down the complete integration.
+        _LOGGER.exception("Podcast Player could not register its bundled dashboard card")
+
     # Do an initial non-blocking refresh shortly after startup if feeds exist.
     if storage.enabled_feeds():
         hass.async_create_task(coordinator.async_refresh_feeds())
@@ -205,6 +213,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await runtime.coordinator.async_shutdown()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        async_unload_card_frontend(hass)
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return unload_ok
 

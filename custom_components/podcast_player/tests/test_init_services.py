@@ -446,11 +446,15 @@ async def test_update_options_and_unload_entry(hass) -> None:
         await async_update_options(hass, entry)
     reload_entry.assert_awaited_once_with(entry.entry_id)
 
-    with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)) as unload_platforms:
+    with (
+        patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)) as unload_platforms,
+        patch("custom_components.podcast_player.async_unload_card_frontend") as unload_card,
+    ):
         assert await async_unload_entry(hass, SimpleNamespace(entry_id="entry")) is True
 
     runtime.coordinator.async_shutdown.assert_awaited_once()
     unload_platforms.assert_awaited_once()
+    unload_card.assert_called_once_with(hass)
     assert "entry" not in hass.data.get(DOMAIN, {})
 
 
