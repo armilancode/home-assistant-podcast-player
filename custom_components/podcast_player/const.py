@@ -6,7 +6,7 @@ from datetime import timedelta
 
 DOMAIN = "podcast_player"
 NAME = "Podcast Player"
-VERSION = "0.3.0-alpha.1"
+VERSION = "0.3.0-alpha.2"
 
 PLATFORMS = ["media_player", "sensor", "binary_sensor", "button"]
 

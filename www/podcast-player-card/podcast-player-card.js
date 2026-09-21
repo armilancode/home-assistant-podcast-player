@@ -38,6 +38,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._audioListenersAttached = false;
     this._pageLifecycleListenersAttached = false;
     this._lastMediaSessionUpdate = 0;
+    this._mediaSessionCleared = false;
     this._boundSharedSpeedHandler = (ev) => this._onSharedSpeedChanged(ev);
     this._boundSharedOutputHandler = (ev) => this._onSharedOutputChanged(ev);
     this._boundStorageHandler = (ev) => this._onStorageChanged(ev);
@@ -82,6 +83,7 @@ class PodcastPlayerCard extends HTMLElement {
         ownerId: null,
         lastSeenAt: 0,
         mediaSessionSupported: PodcastPlayerCard._mediaSessionSupported(),
+        mediaSessionEnabled: false,
         mediaSessionEpisodeId: null,
       };
     }
@@ -96,6 +98,15 @@ class PodcastPlayerCard extends HTMLElement {
     if (typeof navigator === "undefined") return false;
     const ua = String(navigator.userAgent || "");
     return /Android/i.test(ua) && (/\bwv\b/i.test(ua) || /; wv\)/i.test(ua) || /Version\/[\d.]+.*Chrome\/[\d.]+.*Mobile Safari/i.test(ua));
+  }
+
+  _mediaSessionEnabled() {
+    if (!PodcastPlayerCard._mediaSessionSupported()) return false;
+    if (this._config.system_media_controls === false) return false;
+    // Home Assistant Companion renders dashboard cards in Android WebView.
+    // Repeated Media Session notification refreshes can trigger notification
+    // haptics on some phones, so card controls are the safe default there.
+    return !PodcastPlayerCard._isAndroidWebView() || this._config.system_media_controls === true;
   }
 
   static _speedOptions() {
@@ -338,7 +349,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _setMediaSessionAction(action, handler) {
-    if (!PodcastPlayerCard._mediaSessionSupported()) return;
+    if (!this._mediaSessionEnabled()) return;
     try {
       navigator.mediaSession.setActionHandler(action, handler);
     } catch (_) {}
@@ -373,7 +384,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _updateMediaSessionPosition(force = false) {
-    if (!PodcastPlayerCard._mediaSessionSupported() || !navigator.mediaSession.setPositionState || !this._currentEpisode) return;
+    if (!this._mediaSessionEnabled() || !navigator.mediaSession.setPositionState || !this._currentEpisode) return;
     const now = Date.now();
     if (!force && now - this._lastMediaSessionUpdate < 1000) return;
     this._lastMediaSessionUpdate = now;
@@ -392,10 +403,25 @@ class PodcastPlayerCard extends HTMLElement {
 
   _updateMediaSession(force = false) {
     if (!PodcastPlayerCard._mediaSessionSupported()) {
-      if (this._shared) this._shared.mediaSessionSupported = false;
+      if (this._shared) {
+        this._shared.mediaSessionSupported = false;
+        this._shared.mediaSessionEnabled = false;
+      }
       return;
     }
-    if (this._shared) this._shared.mediaSessionSupported = true;
+    if (!this._mediaSessionEnabled()) {
+      if (this._shared) {
+        this._shared.mediaSessionSupported = true;
+        this._shared.mediaSessionEnabled = false;
+      }
+      this._clearMediaSession();
+      return;
+    }
+    this._mediaSessionCleared = false;
+    if (this._shared) {
+      this._shared.mediaSessionSupported = true;
+      this._shared.mediaSessionEnabled = true;
+    }
     if (!this._currentEpisode || this._isSpeakerOutput()) {
       try {
         navigator.mediaSession.playbackState = "none";
@@ -430,10 +456,26 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _clearMediaSession() {
-    if (!PodcastPlayerCard._mediaSessionSupported()) return;
+    if (
+      !PodcastPlayerCard._mediaSessionSupported() ||
+      (this._mediaSessionCleared && !(this._shared && this._shared.mediaSessionEnabled))
+    ) return;
     try {
       navigator.mediaSession.playbackState = "none";
     } catch (_) {}
+    try {
+      navigator.mediaSession.metadata = null;
+    } catch (_) {}
+    ["play", "pause", "stop", "seekbackward", "seekforward", "seekto"].forEach((action) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, null);
+      } catch (_) {}
+    });
+    this._mediaSessionCleared = true;
+    if (this._shared) {
+      this._shared.mediaSessionEnabled = false;
+      this._shared.mediaSessionEpisodeId = null;
+    }
   }
 
   _syncFromShared() {
@@ -900,6 +942,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   _playbackStatusItems() {
     const mediaSessionSupported = PodcastPlayerCard._mediaSessionSupported();
+    const mediaSessionEnabled = this._mediaSessionEnabled();
     const androidWebView = PodcastPlayerCard._isAndroidWebView();
     const selectedTarget = this._selectedSpeakerTarget();
     const speakerState = this._selectedSpeakerState();
@@ -937,18 +980,22 @@ class PodcastPlayerCard extends HTMLElement {
     return [
       {
         label: "Browser controls",
-        value: mediaSessionSupported ? "Supported" : "Unavailable",
-        state: mediaSessionSupported ? "ok" : "warn",
-        title: mediaSessionSupported
+        value: mediaSessionEnabled ? "System + card" : "Card only",
+        state: "ok",
+        title: mediaSessionEnabled
           ? "This browser supports system media metadata and transport actions."
-          : "This browser does not expose the Media Session API to this card.",
+          : mediaSessionSupported
+            ? "System media controls are disabled; use the podcast card controls."
+            : "This browser does not expose the Media Session API; use the podcast card controls.",
       },
       {
         label: "Mobile app",
-        value: androidWebView ? "Limited" : "Normal",
-        state: androidWebView ? "warn" : "ok",
+        value: androidWebView ? (mediaSessionEnabled ? "System controls" : "Haptic-safe") : "Normal",
+        state: androidWebView && mediaSessionEnabled ? "warn" : "ok",
         title: androidWebView
-          ? "Android WebView does not expose full system media controls to dashboard cards."
+          ? mediaSessionEnabled
+            ? "Android system media controls were explicitly enabled and may update the Companion notification."
+            : "Android system media controls are disabled to prevent repeated Companion notification haptics."
           : "No Android WebView media-control limitation detected.",
       },
       {
@@ -2054,6 +2101,7 @@ class PodcastPlayerCard extends HTMLElement {
       browserAudioLoading: this._isBrowserAudioLoading(),
       browserSessionNeedsTakeover: this._browserSessionNeedsTakeover(),
       mediaSessionSupported: PodcastPlayerCard._mediaSessionSupported(),
+      mediaSessionEnabled: this._mediaSessionEnabled(),
       androidWebView: PodcastPlayerCard._isAndroidWebView(),
       error: this._error,
       info: this._info,

@@ -106,6 +106,21 @@ To install the card manually:
    type: custom:podcast-player-card
    ```
 
+The card uses its own play, pause, seek, and speed controls. System media
+controls are enabled by default in regular browsers. They are disabled by
+default in the Home Assistant Android Companion WebView because repeated
+system media-notification refreshes can trigger notification haptics on some
+phones. Android users can explicitly opt back in if they prefer lock-screen
+media controls:
+
+```yaml
+type: custom:podcast-player-card
+system_media_controls: true
+```
+
+Set `system_media_controls: false` to keep system media controls disabled in
+any browser.
+
 ## Media Browser
 
 Podcast Player exposes feeds and episodes through Home Assistant Media Browser. Media Browser playback is handled by the selected Home Assistant `media_player` target. Native progress, pause, seek, and stop behavior depends on that target integration.
