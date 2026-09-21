@@ -24,9 +24,11 @@ class PodcastPlayerCard extends HTMLElement {
     this._shared = PodcastPlayerCard._sharedPlayer();
     this._audio = this._shared.audio;
     this._useProxyForCurrent = Boolean(this._shared.useProxy);
+    this._connected = false;
     this._progressTimer = null;
+    this._progressSaveInFlight = null;
+    this._progressDirty = false;
     this._renderTimer = null;
-    this._lastSave = 0;
     this._lastDynamicUpdate = 0;
     this._deferRenderUntil = 0;
     this._lastRenderKey = "";
@@ -307,17 +309,24 @@ class PodcastPlayerCard extends HTMLElement {
 
   _onPageHidden() {
     if (this._shared) this._shared.lastSeenAt = Date.now();
+    this._stopProgressTimer();
     this._syncToShared();
     this._updateMediaSession(true);
-    this._saveProgress(this._isActuallyPlaying());
+    // Make one best-effort, silent checkpoint while the websocket is still
+    // available. Never keep sending progress while a mobile WebView sleeps.
+    this._saveProgress(this._isActuallyPlaying(), { allowHidden: true });
   }
 
   _onPageShown() {
+    if (!this._connected) return;
     this._syncFromShared();
     this._syncOutputState();
     if (!this._isSpeakerOutput() && this._audio && !this._audio.paused && !this._audio.ended) {
       this._startProgressTimer();
       if (this._shared && this._shared.currentEpisode) this._currentEpisode = this._shared.currentEpisode;
+    }
+    if (this._currentEpisode && (this._progressDirty || this._isActuallyPlaying())) {
+      this._saveProgress(this._isActuallyPlaying());
     }
     if (!this._library && this._hass && !this._loading) this._loadLibrary();
     this._updateMediaSession(true);
@@ -569,6 +578,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   connectedCallback() {
+    this._connected = true;
     this._attachAudioListeners();
     this._attachPageLifecycleListeners();
     window.addEventListener("podcast-player-speed-changed", this._boundSharedSpeedHandler);
@@ -583,20 +593,15 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   disconnectedCallback() {
-    this._saveProgress(!this._audio.paused);
-    const keepBrowserSession = !this._isSpeakerOutput() && this._audio && !this._audio.paused && !this._audio.ended;
+    this._saveProgress(!this._audio.paused, { allowHidden: true });
+    this._connected = false;
     window.removeEventListener("podcast-player-speed-changed", this._boundSharedSpeedHandler);
     window.removeEventListener("podcast-player-output-target-changed", this._boundSharedOutputHandler);
     window.removeEventListener("storage", this._boundStorageHandler);
-    if (!keepBrowserSession) {
-      this._detachAudioListeners();
-      this._detachPageLifecycleListeners();
-      this._clearMediaSession();
-    }
-    if (this._progressTimer && !keepBrowserSession) {
-      window.clearInterval(this._progressTimer);
-      this._progressTimer = null;
-    }
+    this._detachAudioListeners();
+    this._detachPageLifecycleListeners();
+    this._stopProgressTimer();
+    this._clearMediaSession();
   }
 
   getCardSize() {
@@ -1255,6 +1260,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   _onAudioPause() {
     this._setBrowserLoadState("idle");
+    this._stopProgressTimer();
     this._saveProgress(false);
     this._updateMediaSession(true);
   }
@@ -1607,6 +1613,8 @@ class PodcastPlayerCard extends HTMLElement {
       await this._withPendingAction(service, service === "pause" ? "Pausing playback" : "Resuming playback", async () => {
         await this._hass.callService("podcast_player", service, {});
         if (this._library && this._library.player) this._library.player.state = service === "pause" ? "paused" : "playing";
+        if (service === "pause") this._stopProgressTimer();
+        else this._startProgressTimer();
         this._lastRenderKey = "";
         this._render();
       }, { timeoutMs: 12000 });
@@ -1646,6 +1654,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _stop() {
+    this._stopProgressTimer();
     const browserPlaying = !this._audio.paused && !this._audio.ended;
     const target = this._speakerTargetEntity();
 
@@ -1732,8 +1741,14 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _startProgressTimer() {
-    if (this._progressTimer) return;
+    if (this._progressTimer || !this._connected || document.visibilityState === "hidden") return;
     this._progressTimer = window.setInterval(() => this._saveProgress(!this._audio.paused), 10000);
+  }
+
+  _stopProgressTimer() {
+    if (!this._progressTimer) return;
+    window.clearInterval(this._progressTimer);
+    this._progressTimer = null;
   }
 
   _onTimeUpdate() {
@@ -1741,12 +1756,9 @@ class PodcastPlayerCard extends HTMLElement {
     if (this._currentEpisode) {
       this._currentEpisode.position = this._audio.currentTime || 0;
       if (Number.isFinite(this._audio.duration)) this._currentEpisode.duration_seconds = this._audio.duration;
+      this._progressDirty = true;
     }
     const now = Date.now();
-    if (now - this._lastSave > 10000) {
-      this._lastSave = now;
-      this._saveProgress(!this._audio.paused);
-    }
     if (now - this._lastDynamicUpdate > 250) {
       this._lastDynamicUpdate = now;
       this._updateDynamicUi();
@@ -1764,6 +1776,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   async _onEnded() {
+    this._stopProgressTimer();
     this._setBrowserLoadState("idle");
     if (this._currentEpisode) {
       this._currentEpisode.position = this._audio.duration || this._currentEpisode.duration_seconds || 0;
@@ -1793,30 +1806,51 @@ class PodcastPlayerCard extends HTMLElement {
     this._render();
   }
 
-  async _saveProgressForEpisode(episode, playing) {
+  async _saveProgressForEpisode(episode, playing, options = {}) {
     if (!this._hass || !episode) return;
+    const connection = this._hass.connection;
+    const isHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    if (!connection || connection.connected === false || (isHidden && !options.allowHidden)) {
+      this._progressDirty = true;
+      return false;
+    }
+    if (this._progressSaveInFlight) {
+      this._progressDirty = true;
+      return false;
+    }
     const isCurrent = this._currentEpisode && episode.episode_id === this._currentEpisode.episode_id;
     const timing = isCurrent ? this._displayPositionDuration() : { position: Number(episode.position || 0), duration: Number(episode.duration_seconds || 0) };
     const position = Number(timing.position || 0);
     const duration = Number(timing.duration || 0);
+    const request = {
+      type: "podcast_player/save_progress",
+      episode_id: episode.episode_id,
+      position,
+      playing: Boolean(isCurrent ? this._isActuallyPlaying() : playing),
+      speed: this._currentBrowserSpeed(episode),
+    };
+    if (duration) request.duration = duration;
     try {
-      await this._hass.callService("podcast_player", "save_progress", {
-        episode_id: episode.episode_id,
-        position,
-        duration: duration || undefined,
-        playing: Boolean(isCurrent ? this._isActuallyPlaying() : playing),
-        speed: this._currentBrowserSpeed(episode),
-      });
+      this._progressSaveInFlight = connection.sendMessagePromise(request);
+      await this._progressSaveInFlight;
+      this._progressDirty = false;
+      return true;
     } catch (err) {
-      console.warn("Podcast progress save failed", err);
+      // Progress sync is background bookkeeping. Keep it pending for the next
+      // visible/connected checkpoint without creating HA action error toasts.
+      this._progressDirty = true;
+      console.debug("Podcast progress sync deferred", err);
+      return false;
+    } finally {
+      this._progressSaveInFlight = null;
     }
   }
 
-  async _saveProgress(playing) {
+  async _saveProgress(playing, options = {}) {
     if (!this._hass || !this._currentEpisode) return;
     this._syncToShared();
     if (this._isLimitedSpeakerOutput()) return;
-    await this._saveProgressForEpisode(this._currentEpisode, playing);
+    await this._saveProgressForEpisode(this._currentEpisode, playing, options);
   }
 
   _isEditingControl() {

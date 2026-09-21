@@ -2,6 +2,7 @@
 
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -23,6 +24,7 @@ from custom_components.podcast_player.api import (
     async_register_api,
     websocket_get_episode,
     websocket_get_library,
+    websocket_save_progress,
 )
 from custom_components.podcast_player.const import DOMAIN, PLAYER_ENTITY_ID
 from custom_components.podcast_player.speaker_proxy import sign_proxy_token, verify_proxy_token
@@ -408,7 +410,7 @@ def test_async_register_api_registers_once(monkeypatch: pytest.MonkeyPatch) -> N
     async_register_api(hass)
     async_register_api(hass)
 
-    assert commands == [websocket_get_library, websocket_get_episode]
+    assert commands == [websocket_get_library, websocket_get_episode, websocket_save_progress]
     assert [type(view) for view in hass.http.views] == [
         PodcastProxyView,
         PodcastSpeakerProxyView,
@@ -481,6 +483,32 @@ async def test_websocket_get_episode_handles_success_and_errors() -> None:
     unknown = FakeConnection()
     await websocket_get_episode.__wrapped__(_hass(_runtime(storage)), unknown, {"id": 3, "episode_id": "missing"})
     assert unknown.errors == [(3, "not_found", "Unknown episode_id")]
+
+
+@pytest.mark.asyncio
+async def test_websocket_save_progress_uses_internal_sync_command() -> None:
+    """Card progress sync writes through its websocket command."""
+    storage = _storage()
+    coordinator = SimpleNamespace(async_save_progress=AsyncMock())
+    runtime = SimpleNamespace(storage=storage, coordinator=coordinator)
+    connection = FakeConnection()
+
+    await websocket_save_progress.__wrapped__(
+        _hass(runtime),
+        connection,
+        {
+            "id": 4,
+            "episode_id": "ep_new",
+            "position": 43.5,
+            "duration": 100.0,
+            "playing": True,
+            "speed": 1.25,
+        },
+    )
+
+    coordinator.async_save_progress.assert_awaited_once_with("ep_new", 43.5, 100.0, True, 1.25)
+    assert connection.results == [(4, {"saved": True})]
+    assert connection.errors == []
 
 
 def test_audio_proxy_response_headers_defaults() -> None:

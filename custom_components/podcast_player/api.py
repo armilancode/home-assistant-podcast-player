@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+    ALLOWED_SPEEDS,
     DOMAIN,
     HTTP_SPEAKER_ARTWORK_PROXY_URL,
     HTTP_SPEAKER_PROXY_URL,
@@ -222,6 +223,7 @@ def async_register_api(hass: HomeAssistant) -> None:
     if not hass.data.get(REGISTERED_WS_KEY):
         websocket_api.async_register_command(hass, websocket_get_library)
         websocket_api.async_register_command(hass, websocket_get_episode)
+        websocket_api.async_register_command(hass, websocket_save_progress)
         hass.data[REGISTERED_WS_KEY] = True
 
     if not hass.data.get(REGISTERED_HTTP_KEY):
@@ -360,6 +362,34 @@ async def websocket_get_episode(hass: HomeAssistant, connection: websocket_api.A
             settings=runtime.storage.data["settings"],
         ),
     )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "podcast_player/save_progress",
+        vol.Required("episode_id"): str,
+        vol.Required("position"): vol.Coerce(float),
+        vol.Optional("duration"): vol.Coerce(float),
+        vol.Optional("playing"): bool,
+        vol.Optional("speed"): vol.All(vol.Coerce(float), vol.In(ALLOWED_SPEEDS)),
+    }
+)
+@websocket_api.async_response
+async def websocket_save_progress(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Save card playback progress without creating service-action notifications."""
+    runtime = get_runtime(hass)
+    if runtime is None:
+        connection.send_error(msg["id"], "not_configured", "Podcast Player is not configured")
+        return
+
+    await runtime.coordinator.async_save_progress(
+        msg["episode_id"],
+        msg["position"],
+        msg.get("duration"),
+        msg.get("playing"),
+        msg.get("speed"),
+    )
+    connection.send_result(msg["id"], {"saved": True})
 
 
 async def _proxy_episode_audio(request: web.Request, episode_id: str, *, require_signed_token: bool) -> web.StreamResponse:
