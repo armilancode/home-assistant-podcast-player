@@ -43,6 +43,7 @@ from .const import (
 from .coordinator import PodcastRuntime, PodcastUpdateCoordinator
 from .exceptions import translated_error
 from .feed_parser import PodcastParseError
+from .speaker_proxy import ensure_proxy_secret
 from .storage import PodcastStorage, make_feed_id, normalize_rss_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -134,8 +135,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Podcast Player from a config entry."""
     storage = PodcastStorage(hass)
     await storage.async_load()
+    settings_changed = not storage.data["settings"].get("speaker_proxy_secret")
+    ensure_proxy_secret(storage.data["settings"])
     if entry.options:
         storage.data["settings"].update(dict(entry.options))
+        settings_changed = True
+    if settings_changed:
         await storage.async_save()
     coordinator = PodcastUpdateCoordinator(hass, entry, storage)
     await coordinator.async_initialize()

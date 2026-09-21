@@ -1,7 +1,7 @@
-homeassistant==2026.6.4
+homeassistant==2026.9.3
 async-upnp-client
 aio-podcast==0.1.0
 pytest
-pytest-homeassistant-custom-component
+pytest-homeassistant-custom-component==0.13.366
 pytest-cov
-ruff
+ruff==0.16.8

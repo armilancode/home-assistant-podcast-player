@@ -18,6 +18,7 @@ async def test_setup_entry_initializes_runtime_and_forwards_platforms(hass, enab
 
     with (
         patch("custom_components.podcast_player.PodcastStorage.async_load", AsyncMock()),
+        patch("custom_components.podcast_player.PodcastStorage.async_save", AsyncMock()) as save_storage,
         patch("custom_components.podcast_player.async_register_api"),
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)) as forward_setups,
     ):
@@ -26,6 +27,8 @@ async def test_setup_entry_initializes_runtime_and_forwards_platforms(hass, enab
     assert result is True
     assert entry.entry_id in hass.data[DOMAIN]
     assert entry.runtime_data is hass.data[DOMAIN][entry.entry_id]
+    assert entry.runtime_data.storage.data["settings"]["speaker_proxy_secret"]
+    save_storage.assert_awaited_once()
     forward_setups.assert_awaited_once_with(entry, PLATFORMS)
 
 

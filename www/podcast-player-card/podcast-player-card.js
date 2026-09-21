@@ -18,6 +18,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._pendingAction = null;
     this._pendingLabel = null;
     this._browserLoadState = "idle";
+    this._proxyFallbackPromise = null;
     this._error = null;
     this._info = null;
     this._shared = PodcastPlayerCard._sharedPlayer();
@@ -347,7 +348,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._setMediaSessionAction("play", () => {
       if (this._audio && this._audio.src && this._audio.paused) {
         this._audio.play().catch((err) => {
-          this._error = this._errorText(err) || "Audio playback failed.";
+          this._error = this._audioErrorText(this._errorText(err) || "Audio playback failed.");
           this._render();
         });
         return;
@@ -1431,6 +1432,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._seekBrowserToResumePosition(ep);
     this._setSharedBrowserSpeed(this._currentBrowserSpeed(ep), false, false);
     this._syncToShared();
+    const attemptedProxy = this._useProxyForCurrent;
     try {
       await this._audio.play();
       this._shared.sessionId = `${ep.episode_id}:${Date.now()}`;
@@ -1441,29 +1443,73 @@ class PodcastPlayerCard extends HTMLElement {
       this._lastRenderKey = "";
       this._render();
     } catch (err) {
-      if (!this._useProxyForCurrent) {
-        this._info = "Direct playback failed. Trying Home Assistant proxy…";
-        this._useProxyForCurrent = true;
-        this._syncToShared();
-        this._audio.src = ep.proxy_url;
-        this._audio.load();
-        try {
-          await this._audio.play();
-          this._shared.sessionId = `${ep.episode_id}:${Date.now()}`;
-          this._shared.ownerId = this._instanceId;
-          this._shared.lastSeenAt = Date.now();
-          this._updateMediaSession(true);
-          this._startProgressTimer();
-          this._lastRenderKey = "";
-          this._render();
-          return;
-        } catch (proxyErr) {
-          this._error = this._errorText(proxyErr) || "Audio proxy failed.";
-        }
-      } else {
-        this._error = this._errorText(err) || "Audio playback failed.";
+      if (attemptedProxy) {
+        this._error = this._audioErrorText(this._errorText(err) || "Audio playback failed.");
+        this._render();
+        return;
       }
+      if (this._proxyFallbackPromise) {
+        await this._proxyFallbackPromise;
+        return;
+      }
+      // The audio error event may finish the fallback before play() rejects.
+      // Preserve that result instead of starting it again or replacing its error.
+      if (this._useProxyForCurrent) return;
+      await this._playThroughHomeAssistantProxy(ep, this._audio.currentTime || ep.position || 0);
+    }
+  }
+
+  async _playThroughHomeAssistantProxy(ep, resumePosition = 0) {
+    if (this._proxyFallbackPromise) return this._proxyFallbackPromise;
+    if (!ep || !ep.proxy_url) {
+      this._error = "Direct playback failed and Home Assistant did not provide a fallback audio URL.";
+      this._lastRenderKey = "";
       this._render();
+      return false;
+    }
+
+    const fallback = async () => {
+      this._info = "Direct playback failed. Trying Home Assistant proxy…";
+      this._useProxyForCurrent = true;
+      this._syncToShared();
+      this._audio.src = ep.proxy_url;
+      this._audio.load();
+      const position = Number(resumePosition || ep.position || 0);
+      if (position > 0) {
+        this._audio.addEventListener(
+          "loadedmetadata",
+          () => {
+            try {
+              this._audio.currentTime = Math.min(position, Number.isFinite(this._audio.duration) ? this._audio.duration : position);
+            } catch (_) {}
+          },
+          { once: true }
+        );
+      }
+      try {
+        await this._audio.play();
+        this._shared.sessionId = `${ep.episode_id}:${Date.now()}`;
+        this._shared.ownerId = this._instanceId;
+        this._shared.lastSeenAt = Date.now();
+        this._error = null;
+        this._info = "Playing through Home Assistant audio proxy.";
+        this._updateMediaSession(true);
+        this._startProgressTimer();
+        return true;
+      } catch (err) {
+        this._error = this._audioErrorText(this._errorText(err) || "Audio proxy failed.");
+        return false;
+      } finally {
+        this._lastRenderKey = "";
+        this._render();
+      }
+    };
+
+    this._proxyFallbackPromise = fallback();
+    try {
+      return await this._proxyFallbackPromise;
+    } finally {
+      this._proxyFallbackPromise = null;
     }
   }
 
@@ -1707,30 +1753,17 @@ class PodcastPlayerCard extends HTMLElement {
 
   async _onAudioError() {
     this._setBrowserLoadState("idle");
-    if (!this._currentEpisode || this._audio.paused) return;
+    if (!this._currentEpisode) return;
+    if (this._proxyFallbackPromise) {
+      await this._proxyFallbackPromise;
+      return;
+    }
     if (!this._useProxyForCurrent) {
-      this._info = "Direct playback failed. Trying Home Assistant proxy…";
-      this._useProxyForCurrent = true;
-      this._syncToShared();
       const pos = this._audio.currentTime || this._currentEpisode.position || 0;
-      this._audio.src = this._currentEpisode.proxy_url;
-      this._audio.load();
-      this._audio.addEventListener(
-        "loadedmetadata",
-        () => {
-          try {
-            this._audio.currentTime = pos;
-          } catch (_) {}
-        },
-        { once: true }
-      );
-      try {
-        await this._audio.play();
-      } catch (err) {
-        this._error = this._errorText(err) || "Audio proxy failed.";
-      }
+      await this._playThroughHomeAssistantProxy(this._currentEpisode, pos);
+      return;
     } else {
-      this._error = "Audio playback failed.";
+      this._error = this._audioErrorText("Audio playback failed through Home Assistant audio proxy.");
     }
     this._lastRenderKey = "";
     this._render();
@@ -1885,6 +1918,19 @@ class PodcastPlayerCard extends HTMLElement {
     if (err.error && err.error.message) return err.error.message;
     if (err.body && err.body.message) return err.body.message;
     return "Unknown error";
+  }
+
+  _audioErrorText(fallback = "Audio playback failed.") {
+    const error = this._audio && this._audio.error;
+    if (!error) return fallback;
+    const source = this._useProxyForCurrent ? "Home Assistant audio proxy" : "podcast host";
+    const reasons = {
+      1: "Audio loading was interrupted.",
+      2: `A network error occurred while loading from the ${source}.`,
+      3: "The browser could not decode this audio stream.",
+      4: "This audio format or URL is not supported by the browser.",
+    };
+    return reasons[Number(error.code)] || fallback;
   }
 
   _hasPendingAction() {

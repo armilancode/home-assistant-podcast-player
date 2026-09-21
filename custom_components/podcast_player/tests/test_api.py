@@ -2,6 +2,7 @@
 
 import time
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import pytest
@@ -24,12 +25,13 @@ from custom_components.podcast_player.api import (
     websocket_get_library,
 )
 from custom_components.podcast_player.const import DOMAIN, PLAYER_ENTITY_ID
-from custom_components.podcast_player.speaker_proxy import sign_proxy_token
+from custom_components.podcast_player.speaker_proxy import sign_proxy_token, verify_proxy_token
 from custom_components.podcast_player.storage import PodcastStorage, default_data
 
 
 def test_public_episode_includes_media_source_id() -> None:
     """Public episode payloads expose the native HA media-source URI."""
+    settings = {"speaker_proxy_secret": "secret-value"}
     payload = _public_episode(
         {
             "episode_id": "ep_123",
@@ -39,11 +41,20 @@ def test_public_episode_includes_media_source_id() -> None:
         },
         progress={"position": 12, "played": False},
         feed={"title": "Feed One"},
+        settings=settings,
     )
 
     assert payload["media_source_id"] == f"media-source://{DOMAIN}/episode/ep_123"
     assert payload["audio_url"] == "https://example.test/episode.mp3"
-    assert payload["proxy_url"] == "/api/podcast_player/proxy/ep_123"
+    parsed_proxy = urlparse(payload["proxy_url"])
+    proxy_query = parse_qs(parsed_proxy.query)
+    assert parsed_proxy.path == "/api/podcast_player/speaker_proxy/ep_123"
+    assert verify_proxy_token(
+        settings["speaker_proxy_secret"],
+        "ep_123",
+        proxy_query["expires"][0],
+        proxy_query["token"][0],
+    )
 
 
 def test_public_episode_uses_safe_defaults() -> None:
@@ -54,6 +65,7 @@ def test_public_episode_uses_safe_defaults() -> None:
             "duration_seconds": 88,
         },
         progress={"position": "12"},
+        settings={},
     )
 
     assert payload["episode_id"] is None

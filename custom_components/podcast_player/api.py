@@ -15,7 +15,6 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN,
-    HTTP_PROXY_URL,
     HTTP_SPEAKER_ARTWORK_PROXY_URL,
     HTTP_SPEAKER_PROXY_URL,
     PLAYER_ENTITY_ID,
@@ -23,7 +22,11 @@ from .const import (
 )
 from .coordinator import PodcastRuntime
 from .media_source import media_source_id_for_episode
-from .speaker_proxy import ensure_proxy_secret, verify_proxy_token
+from .speaker_proxy import (
+    ensure_proxy_secret,
+    make_signed_speaker_proxy_path,
+    verify_proxy_token,
+)
 from .targets import output_target_status
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,7 +51,13 @@ def get_runtime(hass: HomeAssistant) -> PodcastRuntime | None:
     return next(iter(entries.values()))
 
 
-def _public_episode(episode: dict[str, Any], progress: dict[str, Any] | None = None, feed: dict[str, Any] | None = None) -> dict[str, Any]:
+def _public_episode(
+    episode: dict[str, Any],
+    progress: dict[str, Any] | None = None,
+    feed: dict[str, Any] | None = None,
+    *,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
     """Return frontend-safe episode payload.
 
     The audio URL is exposed only to authenticated HA frontend clients through websocket.
@@ -79,7 +88,10 @@ def _public_episode(episode: dict[str, Any], progress: dict[str, Any] | None = N
         "position": int(progress.get("position", 0) or 0),
         "last_played_at": progress.get("last_played_at"),
         "playback_speed": progress.get("playback_speed"),
-        "proxy_url": HTTP_PROXY_URL.format(episode_id=episode_id),
+        # HTML audio elements cannot attach Home Assistant bearer tokens.
+        # Provide the episode-scoped signed route so browser/Companion fallback
+        # playback also works when the frontend is using an external HA URL.
+        "proxy_url": make_signed_speaker_proxy_path(settings, str(episode_id)) if episode_id else None,
     }
 
 
@@ -302,6 +314,7 @@ async def websocket_get_library(hass: HomeAssistant, connection: websocket_api.A
             ep,
             storage.data["progress"].get(ep.get("episode_id")),
             raw_feeds.get(ep.get("feed_id"), {}),
+            settings=storage.data["settings"],
         )
         for ep in episodes
     ]
@@ -338,7 +351,15 @@ async def websocket_get_episode(hass: HomeAssistant, connection: websocket_api.A
         return
     progress = runtime.storage.data["progress"].get(msg["episode_id"], {})
     feed = runtime.storage.data["feeds"].get(episode.get("feed_id"), {})
-    connection.send_result(msg["id"], _public_episode(episode, progress, feed))
+    connection.send_result(
+        msg["id"],
+        _public_episode(
+            episode,
+            progress,
+            feed,
+            settings=runtime.storage.data["settings"],
+        ),
+    )
 
 
 async def _proxy_episode_audio(request: web.Request, episode_id: str, *, require_signed_token: bool) -> web.StreamResponse:
