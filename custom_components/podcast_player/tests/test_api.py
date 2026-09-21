@@ -511,6 +511,34 @@ async def test_websocket_save_progress_uses_internal_sync_command() -> None:
     assert connection.errors == []
 
 
+@pytest.mark.asyncio
+async def test_websocket_save_progress_rejects_stale_position() -> None:
+    """A passive card cannot roll newer cross-device progress backward."""
+    storage = _storage()
+    storage.data["progress"]["ep_new"] = {"position": 220}
+    coordinator = SimpleNamespace(async_save_progress=AsyncMock())
+    runtime = SimpleNamespace(storage=storage, coordinator=coordinator)
+    connection = FakeConnection()
+
+    await websocket_save_progress.__wrapped__(
+        _hass(runtime),
+        connection,
+        {
+            "id": 5,
+            "episode_id": "ep_new",
+            "position": 181,
+            "duration": 300,
+            "playing": False,
+            "speed": 1.25,
+        },
+    )
+
+    coordinator.async_save_progress.assert_not_awaited()
+    assert connection.results == [
+        (5, {"saved": False, "reason": "stale_position", "position": 220.0})
+    ]
+
+
 def test_audio_proxy_response_headers_defaults() -> None:
     """Audio proxy headers copy safe upstream headers and fill playback defaults."""
     headers = _audio_proxy_response_headers(

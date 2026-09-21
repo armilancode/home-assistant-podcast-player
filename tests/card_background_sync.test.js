@@ -59,6 +59,10 @@ function progressCard() {
   const card = new PodcastPlayerCard();
   card._connected = true;
   card._currentEpisode = { episode_id: "ep_test", position: 60, duration_seconds: 300 };
+  card._shared.currentEpisodeId = "ep_test";
+  card._shared.currentEpisode = card._currentEpisode;
+  card._shared.ownerId = card._instanceId;
+  card._audio.src = "https://example.test/episode.mp3";
   card._audio.currentTime = 124;
   card._audio.duration = 300;
   card._syncToShared = () => {};
@@ -143,4 +147,51 @@ test("a real card touch restores foreground sync despite stale WebView visibilit
   assert.equal(await card._saveProgressForEpisode(card._currentEpisode, false), true);
   assert.equal(messages[0].position, 124);
   document.visibilityState = "visible";
+});
+
+test("a passive card cannot overwrite progress owned by another card", async () => {
+  const card = progressCard();
+  const messages = [];
+  card._shared.ownerId = "another-card";
+  card._progressDirty = true;
+  card._hass = {
+    connection: {
+      connected: true,
+      async sendMessagePromise(message) { messages.push(message); },
+    },
+  };
+
+  assert.equal(await card._saveProgress(false), false);
+  card._onPageHidden();
+  card.disconnectedCallback();
+  assert.equal(messages.length, 0);
+  assert.equal(card._shared.ownerId, "another-card");
+});
+
+test("syncing display state does not steal active playback ownership", () => {
+  const card = progressCard();
+  card._shared.ownerId = "actual-player-card";
+  card._playerState = () => ({ output_mode: "browser" });
+
+  card._syncToShared();
+
+  assert.equal(card._shared.ownerId, "actual-player-card");
+});
+
+test("a passive card displays backend progress instead of stale local audio", () => {
+  const card = progressCard();
+  card._shared.ownerId = null;
+  card._audio.currentTime = 181;
+  card._currentEpisode.position = 181;
+  card._playerState = () => ({
+    current_episode_id: "ep_test",
+    position: 220,
+    duration: 300,
+  });
+
+  assert.deepEqual(card._displayPositionDuration(), {
+    position: 220,
+    duration: 300,
+  });
+  assert.equal(card._resumePositionForEpisode(card._currentEpisode), 220);
 });

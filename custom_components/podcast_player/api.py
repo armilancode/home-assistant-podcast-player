@@ -382,6 +382,23 @@ async def websocket_save_progress(hass: HomeAssistant, connection: websocket_api
         connection.send_error(msg["id"], "not_configured", "Podcast Player is not configured")
         return
 
+    # Card checkpoints are monotonic. A paused/background tab may wake with an
+    # older local position and must never roll newer progress backward. An
+    # intentional backward jump uses the seek action, which updates storage
+    # before the next checkpoint and therefore remains supported.
+    current = runtime.storage.data.get("progress", {}).get(msg["episode_id"], {})
+    current_position = float(current.get("position") or 0)
+    if float(msg["position"]) + 2 < current_position:
+        connection.send_result(
+            msg["id"],
+            {
+                "saved": False,
+                "reason": "stale_position",
+                "position": current_position,
+            },
+        )
+        return
+
     await runtime.coordinator.async_save_progress(
         msg["episode_id"],
         msg["position"],
