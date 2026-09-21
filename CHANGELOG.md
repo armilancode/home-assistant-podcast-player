@@ -15,6 +15,13 @@
 - Storage-mode upgrades remove only exact legacy Podcast Player card resources after the bundled module is active.
 - YAML-managed Lovelace resources remain untouched and produce a targeted migration reminder.
 
+### Validation
+
+- 236 Python tests and 15 browser lifecycle/session tests pass.
+- Ruff, Python compilation, JavaScript syntax validation, and the release-package check pass locally.
+- Home Assistant configuration validation passes on the live installation.
+- A live upgrade from `0.3.0-alpha.2` removed the exact legacy storage-mode resource, served the bundled card with the expected hash, advertised the versioned module, and rendered the existing dashboard without a card-version warning.
+
 ## 0.3.0-alpha.2 — 2026-09-21
 
 ### Fixed
