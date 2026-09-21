@@ -25,6 +25,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._audio = this._shared.audio;
     this._useProxyForCurrent = Boolean(this._shared.useProxy);
     this._connected = false;
+    this._pageHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
     this._progressTimer = null;
     this._progressSaveInFlight = null;
     this._progressSaveSequence = 0;
@@ -49,6 +50,7 @@ class PodcastPlayerCard extends HTMLElement {
     this._boundPageHideHandler = () => this._onPageHidden();
     this._boundPageShowHandler = () => this._onPageShown();
     this._boundWindowFocusHandler = () => this._onPageShown();
+    this._boundForegroundInteractionHandler = () => this._onForegroundInteraction();
     this._boundConnectionReadyHandler = () => this._onConnectionReady();
     this._boundConnectionDisconnectedHandler = () => this._onConnectionDisconnected();
     this._listenedConnection = null;
@@ -332,6 +334,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _onPageHidden() {
+    this._pageHidden = true;
     if (this._shared) this._shared.lastSeenAt = Date.now();
     this._stopProgressTimer();
     this._abandonProgressSave();
@@ -344,6 +347,7 @@ class PodcastPlayerCard extends HTMLElement {
 
   _onPageShown() {
     if (!this._connected) return;
+    this._pageHidden = false;
     this._abandonProgressSave();
     this._attachConnectionListeners();
     this._syncFromShared();
@@ -361,6 +365,16 @@ class PodcastPlayerCard extends HTMLElement {
     this._scheduleRender();
   }
 
+  _onForegroundInteraction() {
+    if (!this._connected) return;
+    const wasHidden = this._pageHidden;
+    this._pageHidden = false;
+    if (!wasHidden) return;
+    this._abandonProgressSave();
+    this._attachConnectionListeners();
+    if (this._isActuallyPlaying()) this._startProgressTimer();
+  }
+
   _onConnectionDisconnected() {
     this._progressDirty = true;
     this._abandonProgressSave();
@@ -368,7 +382,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _onConnectionReady() {
-    if (!this._connected || document.visibilityState === "hidden") return;
+    if (!this._connected || this._pageHidden) return;
     this._abandonProgressSave();
     if (this._isActuallyPlaying()) this._startProgressTimer();
     if (this._currentEpisode && (this._progressDirty || this._isActuallyPlaying())) {
@@ -628,6 +642,7 @@ class PodcastPlayerCard extends HTMLElement {
     window.addEventListener("podcast-player-speed-changed", this._boundSharedSpeedHandler);
     window.addEventListener("podcast-player-output-target-changed", this._boundSharedOutputHandler);
     window.addEventListener("storage", this._boundStorageHandler);
+    this.addEventListener("pointerdown", this._boundForegroundInteractionHandler, { passive: true });
     this._syncOutputState();
     this._syncFromShared();
     this._onPageShown();
@@ -642,6 +657,7 @@ class PodcastPlayerCard extends HTMLElement {
     window.removeEventListener("podcast-player-speed-changed", this._boundSharedSpeedHandler);
     window.removeEventListener("podcast-player-output-target-changed", this._boundSharedOutputHandler);
     window.removeEventListener("storage", this._boundStorageHandler);
+    this.removeEventListener("pointerdown", this._boundForegroundInteractionHandler);
     this._detachAudioListeners();
     this._detachPageLifecycleListeners();
     this._detachConnectionListeners();
@@ -1787,7 +1803,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _startProgressTimer() {
-    if (this._progressTimer || !this._connected || document.visibilityState === "hidden") return;
+    if (this._progressTimer || !this._connected || this._pageHidden) return;
     this._progressTimer = window.setInterval(() => this._saveProgress(!this._audio.paused), 10000);
   }
 
@@ -1859,8 +1875,7 @@ class PodcastPlayerCard extends HTMLElement {
   async _saveProgressForEpisode(episode, playing, options = {}) {
     if (!this._hass || !episode) return;
     const connection = this._hass.connection;
-    const isHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
-    if (!connection || connection.connected === false || (isHidden && !options.allowHidden)) {
+    if (!connection || connection.connected === false || (this._pageHidden && !options.allowHidden)) {
       this._progressDirty = true;
       return false;
     }

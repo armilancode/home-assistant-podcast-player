@@ -14,6 +14,9 @@ class FakeElement {
       querySelectorAll() { return []; },
     };
   }
+
+  addEventListener() {}
+  removeEventListener() {}
 }
 
 class FakeAudio {
@@ -103,12 +106,11 @@ test("hidden playback does not repeatedly send progress", async () => {
     },
   };
 
-  document.visibilityState = "hidden";
+  card._pageHidden = true;
   assert.equal(await card._saveProgressForEpisode(card._currentEpisode, true), false);
   assert.equal(messages.length, 0);
   assert.equal(await card._saveProgressForEpisode(card._currentEpisode, true, { allowHidden: true }), true);
   assert.equal(messages.length, 1);
-  document.visibilityState = "visible";
 });
 
 test("wake abandons a stale lock request and reconnect flushes latest time", () => {
@@ -122,4 +124,23 @@ test("wake abandons a stale lock request and reconnect flushes latest time", () 
 
   assert.equal(card._progressSaveInFlight, null);
   assert.equal(saves, 1);
+});
+
+test("a real card touch restores foreground sync despite stale WebView visibility", async () => {
+  const card = progressCard();
+  const messages = [];
+  card._pageHidden = true;
+  document.visibilityState = "hidden";
+  card._hass = {
+    connection: {
+      connected: true,
+      async sendMessagePromise(message) { messages.push(message); },
+    },
+  };
+
+  card._onForegroundInteraction();
+  assert.equal(card._pageHidden, false);
+  assert.equal(await card._saveProgressForEpisode(card._currentEpisode, false), true);
+  assert.equal(messages[0].position, 124);
+  document.visibilityState = "visible";
 });
