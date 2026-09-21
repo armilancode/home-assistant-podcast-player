@@ -249,6 +249,7 @@ test("claiming playback creates one server-authoritative browser session", async
     position: 239.5,
     duration: 300,
     speed: 1.25,
+    client_type: "web_browser",
   }]);
 });
 
@@ -317,4 +318,24 @@ test("the shared session observer stops audio even when the card view is detache
   assert.equal(pauses, 1);
   assert.equal(card._shared.sessionId, null);
   assert.equal(card._shared.ownerId, null);
+});
+
+test("a passive browser identifies playback in the Home Assistant app", () => {
+  const card = progressCard();
+  card._shared.sessionId = null;
+  card._shared.ownerId = null;
+  card._playerState = () => ({
+    current_episode_id: "ep_test",
+    state: "playing",
+    output_mode: "browser",
+    browser_session_id: "session-phone-456",
+    browser_session_client: "home_assistant_app",
+  });
+
+  const [output, session] = card._playbackStatusItems();
+
+  assert.equal(output.label, "Output");
+  assert.equal(output.value, "Home Assistant app");
+  assert.equal(session.label, "Session");
+  assert.equal(session.value, "Active elsewhere");
 });

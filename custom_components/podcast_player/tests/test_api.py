@@ -541,11 +541,12 @@ async def test_websocket_claim_browser_session_transfers_ownership() -> None:
             "position": 43.5,
             "duration": 100.0,
             "speed": 1.25,
+            "client_type": "home_assistant_app",
         },
     )
 
     coordinator.async_claim_browser_session.assert_awaited_once_with(
-        "ep_new", "session-new-123", 43.5, 100.0, 1.25
+        "ep_new", "session-new-123", 43.5, 100.0, 1.25, "home_assistant_app"
     )
     assert connection.results == [
         (6, {"claimed": True, "session_id": "session-new-123", "position": 44})

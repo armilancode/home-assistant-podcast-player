@@ -115,6 +115,20 @@ class PodcastPlayerCard extends HTMLElement {
     return /Android/i.test(ua) && (/\bwv\b/i.test(ua) || /; wv\)/i.test(ua) || /Version\/[\d.]+.*Chrome\/[\d.]+.*Mobile Safari/i.test(ua));
   }
 
+  static _browserClientType() {
+    const ua = typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "";
+    const companionBridge = typeof window !== "undefined" && Boolean(window.externalApp);
+    return companionBridge || /Home Assistant/i.test(ua) || PodcastPlayerCard._isAndroidWebView()
+      ? "home_assistant_app"
+      : "web_browser";
+  }
+
+  static _browserClientLabel(clientType) {
+    if (clientType === "home_assistant_app") return "Home Assistant app";
+    if (clientType === "web_browser") return "Web browser";
+    return "Browser";
+  }
+
   _mediaSessionEnabled() {
     if (!PodcastPlayerCard._mediaSessionSupported()) return false;
     if (this._config.system_media_controls === false) return false;
@@ -914,6 +928,7 @@ class PodcastPlayerCard extends HTMLElement {
       position: "position",
       position_updated_at: "position_updated_at",
       browser_session_id: "browser_session_id",
+      browser_session_client: "browser_session_client",
       duration: "duration",
       playback_speed: "speed",
       browser_player_state: "state",
@@ -1124,6 +1139,7 @@ class PodcastPlayerCard extends HTMLElement {
   }
 
   _playbackStatusItems() {
+    const player = this._playerState();
     const selectedTarget = this._selectedSpeakerTarget();
     const speakerState = this._selectedSpeakerState();
     const speakerStateName = speakerState && speakerState.state ? String(speakerState.state) : "";
@@ -1141,6 +1157,9 @@ class PodcastPlayerCard extends HTMLElement {
     } else if (selectedTarget) {
       output = this._outputNameFor(selectedTarget);
       outputState = targetStatus.playable ? "Ready" : targetStatus.label;
+    } else if (player.browser_session_id) {
+      output = PodcastPlayerCard._browserClientLabel(player.browser_session_client);
+      outputState = "Active";
     }
     const outputWarn = Boolean(selectedTarget && !targetStatus.playable);
 
@@ -1150,7 +1169,7 @@ class PodcastPlayerCard extends HTMLElement {
     } else if (this._isBrowserAudioLoading()) {
       session = this._browserLoadState === "buffering" ? "Buffering" : "Loading";
     } else if (this._browserSessionNeedsTakeover()) {
-      session = "Resume needed";
+      session = player.state === "playing" ? "Active elsewhere" : "Paused elsewhere";
     } else if (this._audio && !this._audio.paused && !this._audio.ended) {
       session = "Active";
     } else if (this._currentEpisode) {
@@ -1167,7 +1186,7 @@ class PodcastPlayerCard extends HTMLElement {
       {
         label: "Session",
         value: session,
-        state: session === "Resume needed" ? "warn" : "ok",
+        state: "ok",
         title: "Current playback session state.",
       },
     ];
@@ -1327,7 +1346,13 @@ class PodcastPlayerCard extends HTMLElement {
 
   _speakerControlText() {
     if (this._isLimitedSpeakerOutput()) return `External playback on ${this._speakerTargetName()}`;
-    return this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : "Browser playback";
+    return this._isSpeakerOutput() ? `Playing on ${this._speakerTargetName()}` : this._browserOutputLabel();
+  }
+
+  _browserOutputLabel() {
+    const player = this._playerState();
+    if (!player.browser_session_id) return "Browser playback";
+    return PodcastPlayerCard._browserClientLabel(player.browser_session_client);
   }
 
   _speakerTiming() {
@@ -1672,6 +1697,7 @@ class PodcastPlayerCard extends HTMLElement {
         position: Math.max(0, Number(position || 0)),
         duration: Math.max(0, Number(duration || ep.duration_seconds || 0)),
         speed: this._currentBrowserSpeed(ep),
+        client_type: PodcastPlayerCard._browserClientType(),
       });
       if (!result || result.claimed !== true || result.session_id !== sessionId) {
         throw new Error("Home Assistant did not confirm browser playback ownership");
@@ -2468,6 +2494,7 @@ class PodcastPlayerCard extends HTMLElement {
       browserLoadState: this._browserLoadState,
       browserAudioLoading: this._isBrowserAudioLoading(),
       browserSessionNeedsTakeover: this._browserSessionNeedsTakeover(),
+      browserSessionClient: this._playerState().browser_session_client || "",
       mediaSessionSupported: PodcastPlayerCard._mediaSessionSupported(),
       mediaSessionEnabled: this._mediaSessionEnabled(),
       androidWebView: PodcastPlayerCard._isAndroidWebView(),
@@ -2743,7 +2770,7 @@ class PodcastPlayerCard extends HTMLElement {
     const playLabel = this._playPauseLabelForSelected(playing);
     const output = this._isSpeakerOutput()
       ? `Playing on ${this._speakerTargetName()}`
-      : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : "Browser");
+      : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : this._browserOutputLabel());
     const actionPending = this._hasBlockingAction();
     const browserControlsLocked = !externalSelected && this._browserSessionNeedsTakeover();
     const playDisabled = !ep || actionPending || (externalSelected && !targetStatus.playable);
@@ -2873,7 +2900,7 @@ class PodcastPlayerCard extends HTMLElement {
     const playLabel = this._playPauseLabelForSelected(playing);
     const outputLabel = this._isSpeakerOutput()
       ? `Playing on ${this._speakerTargetName()}`
-      : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : "Browser playback");
+      : (externalSelected ? (targetStatus.playable ? `Ready for ${selectedExternalName}` : `${selectedExternalName}: ${targetStatus.label}`) : this._browserOutputLabel());
     const actionPending = this._hasBlockingAction();
     const browserControlsLocked = !externalSelected && this._browserSessionNeedsTakeover();
     const playDisabled = actionPending || (externalSelected && !targetStatus.playable);

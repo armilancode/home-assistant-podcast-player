@@ -373,6 +373,9 @@ async def websocket_get_episode(hass: HomeAssistant, connection: websocket_api.A
         vol.Required("position"): vol.Coerce(float),
         vol.Optional("duration"): vol.Coerce(float),
         vol.Optional("speed"): vol.All(vol.Coerce(float), vol.In(ALLOWED_SPEEDS)),
+        vol.Optional("client_type", default="web_browser"): vol.In(
+            ["home_assistant_app", "web_browser"]
+        ),
     }
 )
 @websocket_api.async_response
@@ -393,6 +396,7 @@ async def websocket_claim_browser_session(
         msg["position"],
         msg.get("duration"),
         msg.get("speed"),
+        msg.get("client_type", "web_browser"),
     )
     connection.send_result(
         msg["id"],

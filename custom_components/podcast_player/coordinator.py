@@ -668,6 +668,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         position: float,
         duration: float | None = None,
         speed: float | None = None,
+        client_type: str = "web_browser",
     ) -> dict[str, Any]:
         """Transfer browser playback ownership to one frontend session."""
         if not self.storage.get_episode(episode_id):
@@ -706,6 +707,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         player = self.storage.data["player"]
         self._set_browser_output(player)
         player["browser_session_id"] = session_id
+        player["browser_session_client"] = client_type
         player["browser_session_updated_at"] = utcnow_iso()
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
@@ -1533,6 +1535,7 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _clear_browser_session(player: dict[str, Any]) -> None:
         """Clear browser ownership when no frontend owns playback."""
         player["browser_session_id"] = None
+        player["browser_session_client"] = None
         player["browser_session_updated_at"] = None
 
     def active_feed_ids(self) -> set[str]:

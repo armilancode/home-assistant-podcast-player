@@ -52,6 +52,7 @@ def test_default_player_has_external_session() -> None:
     assert data["player"]["external_session"] == default_external_session()
     assert data["player"]["external_session"]["active"] is False
     assert data["player"]["browser_session_id"] is None
+    assert data["player"]["browser_session_client"] is None
 
 
 def test_async_load_persists_new_default_keys() -> None:

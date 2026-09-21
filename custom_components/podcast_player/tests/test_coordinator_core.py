@@ -607,12 +607,14 @@ async def test_browser_playback_actions_and_progress_events() -> None:
         "ep_1", "session-browser-123", 32.5, duration=100, speed=1.25
     )
     assert player["browser_session_id"] == "session-browser-123"
+    assert player["browser_session_client"] == "web_browser"
     assert player["position"] == 32
 
     await coord.async_pause()
     assert player["browser_session_id"] == "session-browser-123"
     await coord.async_stop()
     assert player["browser_session_id"] is None
+    assert player["browser_session_client"] is None
     await coord.async_seek("ep_1", 25)
     await coord.async_save_progress("ep_1", 96, duration=100, playing=True, speed=1.25)
     await coord.async_mark_played("ep_1", False)
