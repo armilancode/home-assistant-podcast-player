@@ -1,3 +1,4 @@
+// Podcast Player Card v0.3.0-alpha.2
 class PodcastPlayerCard extends HTMLElement {
   constructor() {
     super();

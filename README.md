@@ -93,14 +93,17 @@ The backend integration works without the companion card. The card adds a richer
 
 To install the card manually:
 
-1. Copy `www/podcast-player-card/podcast-player-card.js` to `www/podcast-player-card/podcast-player-card.js` in your Home Assistant configuration directory.
-2. Add this dashboard resource:
+1. Download `podcast-player-card.js` from the matching entry on the [GitHub Releases page](https://github.com/armilancode/home-assistant-podcast-player/releases). The card is included as a release asset because HACS installs the backend integration but does not copy this repository's `www` directory.
+2. Copy the downloaded file to `www/podcast-player-card/podcast-player-card.js` in your Home Assistant configuration directory.
+3. Add this dashboard resource:
 
    ```text
-   /local/podcast-player-card/podcast-player-card.js
+   /local/podcast-player-card/podcast-player-card.js?v=0.3.0-alpha.2
    ```
 
-3. Add a manual dashboard card using:
+   The version query prevents Home Assistant and the browser from retaining an older card after an update. Change it to the newly installed version whenever you update the card.
+
+4. Add a manual dashboard card using:
 
    ```yaml
    type: custom:podcast-player-card
@@ -120,6 +123,18 @@ system_media_controls: true
 
 Set `system_media_controls: false` to keep system media controls disabled in
 any browser.
+
+### Browser and App Playback Ownership
+
+Browser playback includes both ordinary web browsers and the Home Assistant Companion app's embedded browser. Podcast Player keeps one active browser playback owner at a time:
+
+- While one device is playing, other cards show the active output as **Home Assistant app** or **Web browser** and offer **Take over**.
+- **Take over** transfers playback at the shared position and stops the previous connected player.
+- Pausing saves the shared position and releases device ownership. All cards then show **Play**; the next device to press it becomes the active output.
+- Seek, speed, pause, and progress updates from a stale client are rejected after another device takes over.
+- The **Browser** output-selector option names the local browser playback type. The status panel identifies the actual active client while audio is playing.
+
+This model prevents two connected cards from independently controlling the same browser session while avoiding stale ownership after a browser tab or Companion app is restarted.
 
 ## Media Browser
 
@@ -277,6 +292,7 @@ data:
 - It is not a podcast search directory. Add feeds by RSS URL.
 - The built-in `media_player.podcast_player` entity is a metadata/status entity, not a native browser audio output.
 - Browser playback requires the companion dashboard card.
+- A fully suspended or offline browser cannot receive an immediate takeover stop command. It relinquishes stale ownership when it reconnects; normal connected and background Companion-app playback uses the single-owner behavior described above.
 - External playback depends on the selected Home Assistant media player integration and network reachability.
 - Native progress, seek, pause, resume, and stop support varies by target media player.
 - `signed_proxy` URLs require the target media player to reach your Home Assistant instance.
@@ -302,6 +318,10 @@ data:
 - Check whether the target media player integration exposes those controls.
 - Keep **Enhanced DLNA controls** enabled for compatible DLNA targets.
 - Use `podcast_player.stop_output` with `force: true` if the integration needs to stop a stale external session.
+
+### Every browser shows Paused elsewhere after an update
+
+Version `0.3.0-alpha.2` and newer release browser ownership whenever playback is paused and repair older paused sessions during startup. Confirm that the backend and card use the same release, restart Home Assistant, update the dashboard resource version query, and reload each client once.
 
 ### Feed targets and output media players are mixed up
 
