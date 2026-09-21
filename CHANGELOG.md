@@ -16,7 +16,7 @@
 
 ### Changed
 
-- The playback status identifies an active browser output as **Home Assistant app** or **Web browser**.
+- For local browser playback, the status identifies the active client as **Home Assistant app** or **Web browser**. External playback instead shows the selected Home Assistant media player's friendly name and reported state.
 - Paused browser playback is intentionally unowned: every client shows **Play**, and the next client to press it becomes the active output.
 - Android Companion system media controls are disabled by default to avoid device-specific repeated media-notification haptics. They remain available as an explicit card option.
 - Added browser lifecycle and ownership tests to continuous integration.
