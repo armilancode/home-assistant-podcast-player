@@ -1,4 +1,5 @@
 homeassistant==2026.9.3
+home-assistant-frontend==20260826.7
 async-upnp-client
 aio-podcast==0.1.0
 pytest

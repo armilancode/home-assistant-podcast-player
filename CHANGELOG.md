@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Checkpoint routine speaker progress about every 30 seconds while publishing pauses, output changes, and large seeks promptly. This keeps Home Assistant entities and Recorder from changing on every five-second status poll.
+- Release a podcast speaker session after the target consistently reports unrelated media, preserving the last podcast position without interrupting the target.
+- Exercise bundled-card registration and its served JavaScript with a clean Home Assistant frontend in the development suite.
+
 ## 0.3.0-alpha.3 — 2026-09-21
 
 ### Added

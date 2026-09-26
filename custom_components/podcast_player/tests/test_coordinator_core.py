@@ -540,6 +540,112 @@ async def test_update_external_session_uses_ha_status_and_saves() -> None:
 
 
 @pytest.mark.asyncio
+async def test_external_poll_checkpoints_progress_without_recording_every_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Routine polls stay live in memory while HA sees bounded progress updates."""
+    coord = _coordinator()
+    coord.storage.data["episodes"]["ep_1"] = {"episode_id": "ep_1"}
+    coord.storage.data["player"]["state"] = "playing"
+    coord.storage.data["player"]["output_mode"] = "speaker"
+    coord._set_external_session(
+        episode_id="ep_1",
+        target="media_player.kitchen",
+        target_name="Kitchen",
+        target_platform=None,
+        media_content_id="https://cdn.example.test/ep_1.mp3",
+        resume_position=0,
+        duration=120,
+    )
+    coord._async_dlna_status = AsyncMock(return_value=None)
+    clock = [0.0]
+    position = [0]
+    target_state = ["playing"]
+    monkeypatch.setattr("custom_components.podcast_player.coordinator.monotonic", lambda: clock[0])
+    coord._ha_status_for_target = lambda target: ExternalPlaybackStatus(
+        state=target_state[0], position=position[0], duration=120, progress_source="ha", control_source="ha"
+    )
+
+    await coord.async_update_external_session()
+    assert coord.storage.async_save.await_count == 1
+
+    clock[0], position[0] = 5, 5
+    await coord.async_update_external_session()
+    assert coord.storage.data["player"]["position"] == 5
+    assert coord.storage.async_save.await_count == 1
+
+    clock[0] = 20
+    await coord.async_update_external_session()
+    assert coord.storage.async_save.await_count == 1
+
+    clock[0], position[0] = 30, 30
+    await coord.async_update_external_session()
+    assert coord.storage.async_save.await_count == 2
+
+    clock[0], position[0] = 35, 90
+    await coord.async_update_external_session()
+    assert coord.storage.async_save.await_count == 3
+
+    clock[0], target_state[0] = 40, "paused"
+    await coord.async_update_external_session()
+    assert coord.storage.async_save.await_count == 4
+
+    clock[0] = 45
+    await coord.async_update_external_session()
+    assert coord.storage.async_save.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_external_poll_releases_target_playing_unrelated_media() -> None:
+    """A TV reused for other media cannot overwrite podcast progress or be stopped."""
+    coord = _coordinator()
+    episode_id = "ep_1"
+    podcast_url = "https://cdn.example.test/ep_1.mp3"
+    coord.storage.data["episodes"][episode_id] = {"episode_id": episode_id, "audio_url": podcast_url}
+    coord.storage.save_progress(episode_id, 44, duration=120, playing=True)
+    player = coord.storage.data["player"]
+    player["output_mode"] = "speaker"
+    session = coord._set_external_session(
+        episode_id=episode_id,
+        target="media_player.kitchen",
+        target_name="Kitchen",
+        target_platform=None,
+        media_content_id=podcast_url,
+        resume_position=44,
+        duration=120,
+    )
+    coord._async_dlna_status = AsyncMock(return_value=None)
+    coord._ha_status_for_target = lambda target: ExternalPlaybackStatus(
+        state="playing",
+        position=80,
+        duration=200,
+        current_media_id="https://cdn.example.test/other.mp3",
+        progress_source="ha",
+        control_source="ha",
+    )
+
+    await coord.async_update_external_session()
+    assert session["active"] is True
+    assert coord.storage.async_save.await_count == 0
+    assert player["position"] == 44
+
+    coord.storage.data["player"]["external_session"]["started_at"] = (
+        datetime.now(timezone.utc) - timedelta(minutes=2)
+    ).isoformat()
+    await coord.async_update_external_session()
+    assert session["active"] is True
+    assert coord.storage.async_save.await_count == 0
+
+    await coord.async_update_external_session()
+    assert player["state"] == "paused"
+    assert player["output_mode"] == "browser"
+    assert player["position"] == 44
+    assert coord.storage.get_progress(episode_id)["position"] == 44
+    assert player["external_session"]["active"] is False
+    assert player["external_session"]["media_matches_session"] is False
+    assert coord.hass.services.calls == []
+    assert coord.storage.async_save.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_mark_feed_played_and_browser_resume_selection() -> None:
     """Coordinator selection helpers only use active feeds and unplayed episodes."""
     coord = _coordinator()
