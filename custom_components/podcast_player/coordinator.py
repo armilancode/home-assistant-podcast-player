@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import Any
 from uuid import uuid4
 
@@ -46,6 +47,7 @@ FEED_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=20)
 MAX_PARALLEL_REFRESHES = 4
 ACTIVE_MEDIA_PLAYER_STATES = {"playing", "paused", "buffering"}
 EXTERNAL_POLL_SECONDS = 5
+EXTERNAL_PROGRESS_CHECKPOINT_SECONDS = 30
 EXTERNAL_STARTUP_GRACE_SECONDS = 30
 
 
@@ -109,6 +111,9 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._refresh_sem = asyncio.Semaphore(MAX_PARALLEL_REFRESHES)
         self._external_control = DlnaAvTransportController()
         self._external_poll_task: asyncio.Task[None] | None = None
+        self._last_external_publication: tuple[tuple[Any, ...], int, float] | None = None
+        self._external_mismatch_count = 0
+        self._external_mismatch_session_id: str | None = None
 
     async def async_initialize(self) -> None:
         """Initialize coordinator data without forcing a network refresh."""
@@ -371,6 +376,8 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         player = self.storage.data["player"]
         player["external_session"] = session
         self._clear_browser_session(player)
+        self._external_mismatch_count = 0
+        self._external_mismatch_session_id = session["session_id"]
         return session
 
     def _clear_external_session(self, reason: str | None = None) -> None:
@@ -427,11 +434,19 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         episode_id: str | None,
     ) -> bool | None:
         """Return whether an external status appears to belong to the active session."""
-        return current_media_matches_session(
+        expected_url = self._expected_media_id_for_session(session)
+        match = current_media_matches_session(
             status.current_media_id,
-            self._expected_media_id_for_session(session),
+            expected_url,
             episode_id,
         )
+        if match is False:
+            known_hash = session.get("media_content_id_hash")
+            if known_hash and status.current_media_id and stable_hash(status.current_media_id, 32) == known_hash:
+                return True
+            if not expected_url and not known_hash:
+                return None
+        return match
 
     def _external_status_is_starting(
         self,
@@ -611,12 +626,64 @@ class PodcastUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if status is None:
             return
         episode_id = session.get("episode_id") or self.storage.data["player"].get("current_episode_id")
+        media_match = self._external_status_matches_session(status, session, episode_id)
+        if media_match is False:
+            session_id = session.get("session_id")
+            if getattr(self, "_external_mismatch_session_id", None) != session_id:
+                self._external_mismatch_count = 0
+                self._external_mismatch_session_id = session_id
+            if self._external_session_in_startup_grace(session):
+                return
+            self._external_mismatch_count = getattr(self, "_external_mismatch_count", 0) + 1
+            if self._external_mismatch_count < 2:
+                return
+            # The target has been reused for other media. Keep our last known
+            # podcast position and never stop or seek the unrelated playback.
+            player = self.storage.data["player"]
+            self.storage.set_player_state("paused")
+            session["media_matches_session"] = False
+            self._set_browser_output(player)
+            await self.storage.async_save()
+            self.async_set_updated_data(self.storage.snapshot())
+            return
+        self._external_mismatch_count = 0
         if self._external_status_is_starting(status, session, episode_id):
             await self._async_retry_external_start(str(target), status, session, episode_id)
             status = self._starting_external_status(status, session)
         self._apply_external_status(status)
+        player = self.storage.data["player"]
+        session = self._external_session()
+        publication_state = (
+            session.get("session_id"),
+            session.get("active"),
+            player.get("state"),
+            player.get("output_mode"),
+            player.get("target_media_player"),
+            session.get("duration"),
+            session.get("transport_state"),
+            tuple(session.get("supported_actions") or ()),
+            session.get("control_source"),
+            session.get("progress_source"),
+            session.get("media_matches_session"),
+            session.get("last_error"),
+        )
+        position = int(player.get("position") or 0)
+        now = monotonic()
+        previous = getattr(self, "_last_external_publication", None)
+        publish = previous is None or previous[0] != publication_state
+        if previous is not None and not publish and position != previous[1]:
+            elapsed = max(0, now - previous[2])
+            expected = previous[1] + (elapsed if player.get("state") == "playing" else 0)
+            publish = (
+                elapsed >= EXTERNAL_PROGRESS_CHECKPOINT_SECONDS
+                or position > expected + 5
+                or position < previous[1] - 5
+            )
+        if not publish:
+            return
         await self.storage.async_save()
         self.async_set_updated_data(self.storage.snapshot())
+        self._last_external_publication = (publication_state, position, now)
 
     def _known_episode_or_progress(self, episode_id: str) -> bool:
         """Return true if an episode id is known in the library or progress history."""

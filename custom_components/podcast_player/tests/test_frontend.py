@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL, UrlManager
 from homeassistant.components.lovelace.const import LOVELACE_DATA, MODE_STORAGE, MODE_YAML
+from homeassistant.setup import async_setup_component
 
+from custom_components.podcast_player.const import VERSION
 from custom_components.podcast_player.frontend import (
     CARD_MODULE_URL,
     CARD_PATH,
@@ -104,6 +106,21 @@ async def test_fresh_install_serves_and_loads_bundled_card() -> None:
     assert second_status["available"] is True
     assert len(hass.http.static_paths) == 1
     assert changes == [("added", CARD_MODULE_URL)]
+
+
+async def test_fresh_install_registers_card_with_real_home_assistant(hass, hass_client) -> None:
+    """A clean Home Assistant frontend can load the packaged card directly."""
+    assert await async_setup_component(hass, "frontend", {})
+    assert await async_setup_component(hass, "lovelace", {})
+
+    status = await async_setup_card_frontend(hass)
+
+    assert status["available"] is True
+    assert status["legacy_resources_removed"] == 0
+    assert CARD_MODULE_URL in hass.data[DATA_EXTRA_MODULE_URL].urls
+    response = await (await hass_client()).get(CARD_URL_PATH)
+    assert response.status == 200
+    assert f"Podcast Player Card v{VERSION}" in await response.text()
 
 
 async def test_storage_collection_without_legacy_resource_is_unchanged() -> None:
