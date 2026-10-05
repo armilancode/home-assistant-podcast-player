@@ -143,9 +143,9 @@ def _settings_schema(options: dict[str, Any], *, include_initial_feed: bool = Fa
     }
 
     if include_initial_feed:
-        schema[vol.Optional(CONF_INITIAL_RSS_URL, default="")] = _validate_optional_rss_url
+        schema[vol.Optional(CONF_INITIAL_RSS_URL, default="")] = cv.string
     else:
-        schema[vol.Optional(CONF_NEW_FEED_URL, default="")] = _validate_optional_rss_url
+        schema[vol.Optional(CONF_NEW_FEED_URL, default="")] = cv.string
         schema[vol.Optional(CONF_REMOVE_FEED_ID, default=NO_FEED_SELECTION)] = vol.In(feed_select_options(feeds or []))
         schema[vol.Optional(CONF_REMOVE_FEED_KEEP_HISTORY, default=True)] = cv.boolean
 
@@ -182,14 +182,17 @@ class PodcastPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data = {}
             if user_input.get(CONF_INITIAL_RSS_URL):
                 try:
-                    await async_validate_feed_url(self.hass, user_input[CONF_INITIAL_RSS_URL])
+                    rss_url = _validate_optional_rss_url(user_input[CONF_INITIAL_RSS_URL])
+                    await async_validate_feed_url(self.hass, rss_url)
+                except vol.Invalid:
+                    errors[CONF_INITIAL_RSS_URL] = "invalid_url"
                 except PodcastParseError as err:
                     errors[CONF_INITIAL_RSS_URL] = _config_flow_feed_error(err)
                 except Exception:  # noqa: BLE001 - config flow must return a clean form error
                     _LOGGER.exception("Unexpected error while validating initial podcast feed")
                     errors[CONF_INITIAL_RSS_URL] = "cannot_add_feed"
                 else:
-                    data[CONF_INITIAL_RSS_URL] = user_input[CONF_INITIAL_RSS_URL]
+                    data[CONF_INITIAL_RSS_URL] = rss_url
             if not errors:
                 return self.async_create_entry(title=NAME, data=data, options=options)
 
@@ -220,7 +223,10 @@ class PodcastPlayerOptionsFlow(config_entries.OptionsFlow):
 
             if runtime is not None and new_feed_url:
                 try:
+                    new_feed_url = _validate_optional_rss_url(new_feed_url)
                     await runtime.coordinator.async_add_feed(new_feed_url)
+                except vol.Invalid:
+                    errors[CONF_NEW_FEED_URL] = "invalid_url"
                 except PodcastParseError as err:
                     errors[CONF_NEW_FEED_URL] = err.code if err.code in {"invalid_url"} else "cannot_add_feed"
                 except HomeAssistantError:
@@ -229,7 +235,7 @@ class PodcastPlayerOptionsFlow(config_entries.OptionsFlow):
                     _LOGGER.exception("Unexpected error while adding podcast feed from options")
                     errors[CONF_NEW_FEED_URL] = "cannot_add_feed"
 
-            if runtime is not None and remove_requested:
+            if runtime is not None and remove_requested and not errors:
                 removed = await runtime.coordinator.async_remove_feed(
                     remove_feed_id,
                     keep_history=bool(user_input.get(CONF_REMOVE_FEED_KEEP_HISTORY, True)),
