@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResultType, InvalidData
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
+from probatio import to_field_list
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.podcast_player.config_flow import (
@@ -79,6 +81,27 @@ async def test_user_flow_shows_form(hass, enable_custom_integrations) -> None:
     assert result["step_id"] == "user"
     assert result["errors"] == {}
 
+    fields = to_field_list(result["data_schema"], custom_serializer=cv.custom_serializer)
+    rss_field = next(field for field in fields if field["name"] == CONF_INITIAL_RSS_URL)
+    assert rss_field["type"] == "string"
+    assert rss_field["default"] == ""
+
+
+async def test_options_flow_shows_serializable_form(hass, enable_custom_integrations) -> None:
+    """The options form can be serialized for the frontend, including the RSS field."""
+    entry = MockConfigEntry(domain=DOMAIN, title=NAME, options=default_options())
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    assert result["errors"] == {}
+    fields = to_field_list(result["data_schema"], custom_serializer=cv.custom_serializer)
+    rss_field = next(field for field in fields if field["name"] == CONF_NEW_FEED_URL)
+    assert rss_field["type"] == "string"
+    assert rss_field["default"] == ""
+
 
 async def test_user_flow_creates_entry(hass, enable_custom_integrations) -> None:
     """The user step stores normalized options and optional initial feed data."""
@@ -117,10 +140,10 @@ async def test_user_flow_rejects_duplicate_entry(hass, enable_custom_integration
 
 
 async def test_user_flow_rejects_invalid_initial_feed_url(hass, enable_custom_integrations) -> None:
-    """Invalid optional initial feed URLs are rejected by the setup form schema."""
+    """Invalid optional initial feed URLs return a field error without fetching."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-    with pytest.raises(InvalidData) as err:
-        await hass.config_entries.flow.async_configure(
+    with patch("custom_components.podcast_player.config_flow.async_validate_feed_url", AsyncMock()) as validate_feed:
+        result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
                 **USER_INPUT,
@@ -128,7 +151,21 @@ async def test_user_flow_rejects_invalid_initial_feed_url(hass, enable_custom_in
             },
         )
 
-    assert err.value.schema_errors == {CONF_INITIAL_RSS_URL: "RSS URL must start with http:// or https://"}
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_INITIAL_RSS_URL: "invalid_url"}
+    validate_feed.assert_not_awaited()
+    to_field_list(result["data_schema"], custom_serializer=cv.custom_serializer)
+
+
+async def test_user_flow_allows_empty_initial_feed_url(hass, enable_custom_integrations) -> None:
+    """The first feed remains optional and an empty value is not fetched."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+    with patch("custom_components.podcast_player.config_flow.async_validate_feed_url", AsyncMock()) as validate_feed:
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {**USER_INPUT, CONF_INITIAL_RSS_URL: ""})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {}
+    validate_feed.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -193,7 +230,7 @@ async def test_options_flow_adds_and_removes_feeds(hass, enable_custom_integrati
         result["flow_id"],
         {
             **USER_INPUT,
-            CONF_NEW_FEED_URL: "https://example.test/new.xml",
+            CONF_NEW_FEED_URL: " https://example.test/new.xml ",
             CONF_REMOVE_FEED_ID: "feed_1",
             CONF_REMOVE_FEED_KEEP_HISTORY: False,
         },
@@ -202,6 +239,30 @@ async def test_options_flow_adds_and_removes_feeds(hass, enable_custom_integrati
     assert result["type"] is FlowResultType.CREATE_ENTRY
     runtime.coordinator.async_add_feed.assert_awaited_once_with("https://example.test/new.xml")
     runtime.coordinator.async_remove_feed.assert_awaited_once_with("feed_1", keep_history=False)
+
+
+async def test_options_flow_rejects_invalid_feed_url_before_feed_changes(hass, enable_custom_integrations) -> None:
+    """An invalid URL returns a field error without adding or removing feeds."""
+    entry = MockConfigEntry(domain=DOMAIN, title=NAME, options=default_options())
+    entry.add_to_hass(hass)
+    runtime = _runtime()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **USER_INPUT,
+            CONF_NEW_FEED_URL: "ftp://example.test/feed.xml",
+            CONF_REMOVE_FEED_ID: "feed_1",
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_NEW_FEED_URL: "invalid_url"}
+    runtime.coordinator.async_add_feed.assert_not_awaited()
+    runtime.coordinator.async_remove_feed.assert_not_awaited()
+    to_field_list(result["data_schema"], custom_serializer=cv.custom_serializer)
 
 
 @pytest.mark.parametrize(
